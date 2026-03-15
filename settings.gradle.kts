@@ -1,0 +1,1 @@
+rootProject.name = "wc3-model-explorer"
