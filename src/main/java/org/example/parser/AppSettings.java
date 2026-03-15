@@ -2,6 +2,7 @@ package org.example.parser;
 
 import org.example.model.ExternalProgram;
 import org.example.model.PortraitFilter;
+import org.example.model.ThumbnailQuality;
 import org.example.model.ThumbnailSize;
 
 import java.io.IOException;
@@ -25,6 +26,7 @@ public final class AppSettings {
     private static final String KEY_CAMERA_YAW          = "cameraYaw";
     private static final String KEY_CAMERA_PITCH        = "cameraPitch";
     private static final String KEY_THUMBNAIL_ANIM      = "thumbnailAnimName";
+    private static final String KEY_THUMBNAIL_QUALITY   = "thumbnailQuality";
     private static final String SETTINGS_FILE_NAME      = "settings.properties";
 
     public static final float DEFAULT_CAMERA_YAW   = 200f;
@@ -41,6 +43,7 @@ public final class AppSettings {
     private float          cameraYaw      = DEFAULT_CAMERA_YAW;
     private float          cameraPitch    = DEFAULT_CAMERA_PITCH;
     private String         thumbnailAnimName = "Stand";
+    private ThumbnailQuality thumbnailQuality = ThumbnailQuality.MEDIUM;
     private List<ExternalProgram> externalPrograms = new ArrayList<>();
 
     private AppSettings(Path settingsPath) {
@@ -141,6 +144,14 @@ public final class AppSettings {
         this.thumbnailAnimName = name == null ? "Stand" : name.trim();
     }
 
+    public ThumbnailQuality thumbnailQuality() {
+        return thumbnailQuality;
+    }
+
+    public void setThumbnailQuality(ThumbnailQuality quality) {
+        this.thumbnailQuality = quality == null ? ThumbnailQuality.MEDIUM : quality;
+    }
+
     public List<ExternalProgram> externalPrograms() {
         return new ArrayList<>(externalPrograms);
     }
@@ -161,6 +172,7 @@ public final class AppSettings {
         properties.setProperty(KEY_CAMERA_YAW, String.valueOf(cameraYaw));
         properties.setProperty(KEY_CAMERA_PITCH, String.valueOf(cameraPitch));
         properties.setProperty(KEY_THUMBNAIL_ANIM, thumbnailAnimName);
+        properties.setProperty(KEY_THUMBNAIL_QUALITY, thumbnailQuality.name());
         for (int i = 0; i < externalPrograms.size(); i++) {
             ExternalProgram p = externalPrograms.get(i);
             properties.setProperty("external.program." + i + ".name", p.name());
@@ -202,6 +214,8 @@ public final class AppSettings {
             cameraYaw = parseFloat(properties.getProperty(KEY_CAMERA_YAW), DEFAULT_CAMERA_YAW);
             cameraPitch = parseFloat(properties.getProperty(KEY_CAMERA_PITCH), DEFAULT_CAMERA_PITCH);
             thumbnailAnimName = properties.getProperty(KEY_THUMBNAIL_ANIM, "Stand");
+            String qualityVal = properties.getProperty(KEY_THUMBNAIL_QUALITY, ThumbnailQuality.MEDIUM.name());
+            thumbnailQuality = parseThumbnailQuality(qualityVal);
             int progCount = parseInt(properties.getProperty("external.program.count"), 0);
             externalPrograms = new ArrayList<>();
             for (int i = 0; i < progCount; i++) {
@@ -231,6 +245,14 @@ public final class AppSettings {
             return ThumbnailSize.valueOf(value);
         } catch (IllegalArgumentException ignored) {
             return ThumbnailSize.MEDIUM;
+        }
+    }
+
+    private static ThumbnailQuality parseThumbnailQuality(String value) {
+        try {
+            return ThumbnailQuality.valueOf(value);
+        } catch (IllegalArgumentException ignored) {
+            return ThumbnailQuality.MEDIUM;
         }
     }
 

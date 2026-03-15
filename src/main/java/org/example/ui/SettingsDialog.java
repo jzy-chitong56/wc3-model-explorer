@@ -2,6 +2,7 @@ package org.example.ui;
 
 import org.example.model.*;
 import org.example.model.ExternalProgram;
+import org.example.model.ThumbnailQuality;
 import org.example.parser.*;
 
 import javax.swing.BorderFactory;
@@ -70,6 +71,7 @@ public final class SettingsDialog extends JDialog {
     private final JLabel  yawLabel    = new JLabel(yawSlider.getValue() + "\u00B0");
     private final JLabel  pitchLabel  = new JLabel(pitchSlider.getValue() + "\u00B0");
     private final JTextField animNameField = new JTextField("Stand", 12);
+    private final JComboBox<ThumbnailQuality> qualityCombo = new JComboBox<>(ThumbnailQuality.values());
     private final DefaultListModel<ExternalProgram> extProgListModel = new DefaultListModel<>();
     private final JList<ExternalProgram> extProgList = new JList<>(extProgListModel);
 
@@ -243,8 +245,20 @@ public final class SettingsDialog extends JDialog {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         panel.add(new JLabel("<html><font color='gray'>Animation name used for thumbnail pose (e.g. Stand, Attack). Leave empty for bind pose.</font></html>"), gbc);
 
+        // Thumbnail quality
+        gbc.gridx = 0; gbc.gridy = 5; gbc.gridwidth = 1; gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        panel.add(new JLabel("Thumbnail quality:"), gbc);
+
+        gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(qualityCombo, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 6; gbc.gridwidth = 3; gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(new JLabel("<html><font color='gray'>Higher quality renders at a larger resolution then downscales. Uses more GPU time.</font></html>"), gbc);
+
         // Push to top
-        gbc.gridx = 0; gbc.gridy = 5; gbc.gridwidth = 3; gbc.weighty = 1.0;
+        gbc.gridx = 0; gbc.gridy = 7; gbc.gridwidth = 3; gbc.weighty = 1.0;
         gbc.fill = GridBagConstraints.BOTH;
         panel.add(new JPanel(), gbc);
 
@@ -272,15 +286,25 @@ public final class SettingsDialog extends JDialog {
         });
         outer.add(new JScrollPane(extProgList), BorderLayout.CENTER);
 
+        extProgList.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 2) editSelectedExternalProgram();
+            }
+        });
+
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         JButton addBtn = new JButton("Add…");
+        JButton editBtn = new JButton("Edit…");
         JButton removeBtn = new JButton("Remove");
         addBtn.addActionListener(e -> addExternalProgram());
+        editBtn.addActionListener(e -> editSelectedExternalProgram());
         removeBtn.addActionListener(e -> {
             int idx = extProgList.getSelectedIndex();
             if (idx >= 0) extProgListModel.remove(idx);
         });
         buttons.add(addBtn);
+        buttons.add(editBtn);
         buttons.add(removeBtn);
         outer.add(buttons, BorderLayout.SOUTH);
 
@@ -288,8 +312,25 @@ public final class SettingsDialog extends JDialog {
     }
 
     private void addExternalProgram() {
-        JTextField nameField = new JTextField(15);
-        JTextField cmdField = new JTextField(30);
+        ExternalProgram result = showExternalProgramDialog("Add External Program", "", "");
+        if (result != null) {
+            extProgListModel.addElement(result);
+        }
+    }
+
+    private void editSelectedExternalProgram() {
+        int idx = extProgList.getSelectedIndex();
+        if (idx < 0) return;
+        ExternalProgram existing = extProgListModel.get(idx);
+        ExternalProgram result = showExternalProgramDialog("Edit External Program", existing.name(), existing.command());
+        if (result != null) {
+            extProgListModel.set(idx, result);
+        }
+    }
+
+    private ExternalProgram showExternalProgramDialog(String title, String initialName, String initialCmd) {
+        JTextField nameField = new JTextField(initialName, 15);
+        JTextField cmdField = new JTextField(initialCmd, 30);
         JButton browseBtn = new JButton("Browse…");
         browseBtn.addActionListener(e -> {
             JFileChooser fc = new JFileChooser();
@@ -299,7 +340,6 @@ public final class SettingsDialog extends JDialog {
             if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
                 MainWindow.lastChooserDir = fc.getCurrentDirectory();
                 String path = fc.getSelectedFile().getAbsolutePath();
-                // Quote path if it contains spaces, append {file} placeholder
                 String quoted = path.contains(" ") ? "\"" + path + "\"" : path;
                 cmdField.setText(quoted + " {file}");
                 if (nameField.getText().isBlank()) {
@@ -331,15 +371,16 @@ public final class SettingsDialog extends JDialog {
         panel.add(new JLabel("<html><font color='gray'>Use {file} as placeholder for the model path. "
                 + "E.g.: blender.exe {file}</font></html>"), gbc);
 
-        int result = JOptionPane.showConfirmDialog(this, panel, "Add External Program",
+        int result = JOptionPane.showConfirmDialog(this, panel, title,
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (result == JOptionPane.OK_OPTION) {
             String name = nameField.getText().trim();
             String cmd = cmdField.getText().trim();
             if (!name.isEmpty() && !cmd.isEmpty()) {
-                extProgListModel.addElement(new ExternalProgram(name, cmd));
+                return new ExternalProgram(name, cmd);
             }
         }
+        return null;
     }
 
     private JPanel buildButtonBar() {
@@ -422,6 +463,7 @@ public final class SettingsDialog extends JDialog {
         settings.setCameraYaw(yawSlider.getValue());
         settings.setCameraPitch(pitchSlider.getValue());
         settings.setThumbnailAnimName(animNameField.getText());
+        settings.setThumbnailQuality((ThumbnailQuality) qualityCombo.getSelectedItem());
 
         List<ExternalProgram> programs = new ArrayList<>();
         for (int i = 0; i < extProgListModel.size(); i++) programs.add(extProgListModel.get(i));
@@ -483,6 +525,7 @@ public final class SettingsDialog extends JDialog {
         pitchSlider.setValue((int) settings.cameraPitch());
         pitchLabel.setText(pitchSlider.getValue() + "\u00B0");
         animNameField.setText(settings.thumbnailAnimName());
+        qualityCombo.setSelectedItem(settings.thumbnailQuality());
 
         extProgListModel.clear();
         for (ExternalProgram p : settings.externalPrograms()) {

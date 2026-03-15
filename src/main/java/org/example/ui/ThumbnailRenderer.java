@@ -41,8 +41,9 @@ import static org.lwjgl.opengl.GL30.*;
  */
 public final class ThumbnailRenderer {
 
-    private static final int THUMB_SIZE = 256;
-    private static final int RENDER_SIZE = 512; // supersample at 2x then downsample
+    private int thumbSize = 256;
+    private int renderSize = 512; // supersample then downsample
+    private boolean fboNeedsResize;
 
     // Team color 0 (red) used for thumbnails
     private static final int TEAM_COLOR_IDX = 0;
@@ -95,6 +96,10 @@ public final class ThumbnailRenderer {
                     initGlResources();
                     glInitialized = true;
                 }
+                if (fboNeedsResize) {
+                    resizeFbo();
+                    fboNeedsResize = false;
+                }
                 ThumbnailRequest req = currentRequest;
                 if (req != null && req != ThumbnailRequest.POISON) {
                     currentResult = renderThumbnail(req);
@@ -145,6 +150,14 @@ public final class ThumbnailRenderer {
 
     public void setAnimationName(String name) {
         this.animationName = name == null ? "" : name.trim();
+    }
+
+    public void setQuality(int newRenderSize, int newThumbSize) {
+        if (newRenderSize != this.renderSize || newThumbSize != this.thumbSize) {
+            this.renderSize = newRenderSize;
+            this.thumbSize = newThumbSize;
+            this.fboNeedsResize = true;
+        }
     }
 
     public void setBackgroundColor(int r, int g, int b) {
@@ -219,7 +232,7 @@ public final class ThumbnailRenderer {
 
         fboColorTex = glGenTextures();
         glBindTexture(GL_TEXTURE_2D, fboColorTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, RENDER_SIZE, RENDER_SIZE, 0,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, renderSize, renderSize, 0,
                 GL_RGBA, GL_UNSIGNED_BYTE, (ByteBuffer) null);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -227,7 +240,7 @@ public final class ThumbnailRenderer {
 
         fboDepthRbo = glGenRenderbuffers();
         glBindRenderbuffer(GL_RENDERBUFFER, fboDepthRbo);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, RENDER_SIZE, RENDER_SIZE);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, renderSize, renderSize);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fboDepthRbo);
 
         int status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -237,7 +250,20 @@ public final class ThumbnailRenderer {
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glBindTexture(GL_TEXTURE_2D, 0);
-        System.out.println("[Thumbnail] GL initialized, FBO " + RENDER_SIZE + "x" + RENDER_SIZE + " -> " + THUMB_SIZE + "x" + THUMB_SIZE);
+        System.out.println("[Thumbnail] GL initialized, FBO " + renderSize + "x" + renderSize + " -> " + thumbSize + "x" + thumbSize);
+    }
+
+    private void resizeFbo() {
+        glBindTexture(GL_TEXTURE_2D, fboColorTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, renderSize, renderSize, 0,
+                GL_RGBA, GL_UNSIGNED_BYTE, (ByteBuffer) null);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        glBindRenderbuffer(GL_RENDERBUFFER, fboDepthRbo);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, renderSize, renderSize);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+        System.out.println("[Thumbnail] FBO resized to " + renderSize + "x" + renderSize + " -> " + thumbSize + "x" + thumbSize);
     }
 
     private BufferedImage renderThumbnail(ThumbnailRequest req) {
@@ -386,7 +412,7 @@ public final class ThumbnailRenderer {
 
         // Render to FBO at supersampled resolution
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glViewport(0, 0, RENDER_SIZE, RENDER_SIZE);
+        glViewport(0, 0, renderSize, renderSize);
         glClearColor(bgR, bgG, bgB, 1f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST);
@@ -440,16 +466,16 @@ public final class ThumbnailRenderer {
         glBindTexture(GL_TEXTURE_2D, 0);
 
         // Read pixels at supersampled resolution
-        ByteBuffer pixels = ByteBuffer.allocateDirect(RENDER_SIZE * RENDER_SIZE * 4)
+        ByteBuffer pixels = ByteBuffer.allocateDirect(renderSize * renderSize * 4)
                 .order(ByteOrder.nativeOrder());
-        glReadPixels(0, 0, RENDER_SIZE, RENDER_SIZE, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        glReadPixels(0, 0, renderSize, renderSize, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
         // Convert to BufferedImage at render size (flip Y)
-        BufferedImage hiRes = new BufferedImage(RENDER_SIZE, RENDER_SIZE, BufferedImage.TYPE_INT_ARGB);
-        for (int y = 0; y < RENDER_SIZE; y++) {
-            for (int x = 0; x < RENDER_SIZE; x++) {
-                int srcIdx = ((RENDER_SIZE - 1 - y) * RENDER_SIZE + x) * 4;
+        BufferedImage hiRes = new BufferedImage(renderSize, renderSize, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < renderSize; y++) {
+            for (int x = 0; x < renderSize; x++) {
+                int srcIdx = ((renderSize - 1 - y) * renderSize + x) * 4;
                 int r = pixels.get(srcIdx) & 0xFF;
                 int g = pixels.get(srcIdx + 1) & 0xFF;
                 int b = pixels.get(srcIdx + 2) & 0xFF;
@@ -459,10 +485,10 @@ public final class ThumbnailRenderer {
         }
 
         // Downsample to thumbnail size with bilinear filtering
-        BufferedImage img = new BufferedImage(THUMB_SIZE, THUMB_SIZE, BufferedImage.TYPE_INT_ARGB);
+        BufferedImage img = new BufferedImage(thumbSize, thumbSize, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2 = img.createGraphics();
         g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        g2.drawImage(hiRes, 0, 0, THUMB_SIZE, THUMB_SIZE, null);
+        g2.drawImage(hiRes, 0, 0, thumbSize, thumbSize, null);
         g2.dispose();
 
         // Cleanup per-model GL resources

@@ -76,6 +76,7 @@ public final class MainWindow extends JFrame {
     private ThumbnailRenderer thumbnailRenderer;
     private Timer shimmerTimer;
     private int pendingThumbnails;
+    private int totalThumbnails;
 
     public MainWindow() {
         super("WC3 Model Explorer (Swing)");
@@ -355,7 +356,10 @@ public final class MainWindow extends JFrame {
     private void openInExternalProgram(ExternalProgram program, ModelAsset asset) {
         try {
             String modelPath = asset.path().toAbsolutePath().toString();
-            String expanded = program.command().replace("{file}", modelPath);
+            String cmd = program.command();
+            String expanded = cmd.contains("{file}")
+                    ? cmd.replace("{file}", modelPath)
+                    : cmd + " \"" + modelPath + "\"";
             // Parse command respecting quoted segments
             List<String> args = parseCommand(expanded);
             new ProcessBuilder(args).start();
@@ -420,6 +424,7 @@ public final class MainWindow extends JFrame {
         final Path root = scanRoot;
 
         pendingThumbnails = 0;
+        totalThumbnails = 0;
         final int batchSize = 3;
         final int[] index = {0};
         progressiveLoadTimer = new Timer(16, event -> {
@@ -431,9 +436,11 @@ public final class MainWindow extends JFrame {
                 // Queue thumbnail if not cached
                 if (thumbnailRenderer.getThumbnail(asset.path()) == null) {
                     pendingThumbnails++;
+                    totalThumbnails++;
                     thumbnailRenderer.request(asset, root, img -> {
                         pendingThumbnails--;
                         assetList.repaint();
+                        updateThumbnailProgress();
                         if (pendingThumbnails <= 0) stopShimmerTimer();
                     });
                 }
@@ -473,6 +480,8 @@ public final class MainWindow extends JFrame {
         }
         thumbnailRenderer.setCameraAngles(settings.cameraYaw(), settings.cameraPitch());
         thumbnailRenderer.setAnimationName(settings.thumbnailAnimName());
+        ThumbnailQuality quality = settings.thumbnailQuality();
+        thumbnailRenderer.setQuality(quality.renderSize(), quality.thumbSize());
     }
 
     private void startShimmerTimer() {
@@ -484,6 +493,14 @@ public final class MainWindow extends JFrame {
 
     private void stopShimmerTimer() {
         if (shimmerTimer != null && shimmerTimer.isRunning()) shimmerTimer.stop();
+        statusLabel.setText(String.format("Showing %d / %d model files",
+                listModel.getSize(), allAssets.size()));
+    }
+
+    private void updateThumbnailProgress() {
+        int done = totalThumbnails - pendingThumbnails;
+        statusLabel.setText(String.format("Showing %d / %d model files — Thumbnails: %d / %d",
+                listModel.getSize(), allAssets.size(), done, totalThumbnails));
     }
 
     private void stopProgressiveLoader() {
@@ -696,6 +713,8 @@ public final class MainWindow extends JFrame {
     private static final class ShimmerPreviewLabel extends JLabel {
         private static final Color SHIMMER_BASE = new Color(44, 49, 56);
         private static final Color SHIMMER_HIGHLIGHT = new Color(64, 69, 76);
+        private static final Color LOADING_TEXT_COLOR = new Color(140, 150, 160);
+        private static final Color SPINNER_COLOR = new Color(100, 140, 200);
         private Image scaledThumb;
         private BufferedImage lastSource;
         private int lastSize;
@@ -706,7 +725,7 @@ public final class MainWindow extends JFrame {
                 if (thumb != lastSource || displaySize != lastSize) {
                     lastSource = thumb;
                     lastSize = displaySize;
-                    scaledThumb = thumb.getScaledInstance(displaySize, displaySize, Image.SCALE_FAST);
+                    scaledThumb = thumb.getScaledInstance(displaySize, displaySize, Image.SCALE_SMOOTH);
                 }
                 setIcon(new ImageIcon(scaledThumb));
             } else {
@@ -738,6 +757,28 @@ public final class MainWindow extends JFrame {
                         bandX + bandWidth / 2, 0, SHIMMER_HIGHLIGHT,
                         bandX + bandWidth, 0, SHIMMER_BASE));
                 g2.fillRect(bandX + bandWidth / 2, 0, bandWidth / 2, h);
+
+                // Draw spinning arc
+                g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                        java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+                int spinnerSize = Math.min(w, h) / 4;
+                int sx = (w - spinnerSize) / 2;
+                int sy = (h - spinnerSize) / 2 - 8;
+                float spinAngle = (System.currentTimeMillis() % 1000) / 1000f * 360f;
+                g2.setColor(SPINNER_COLOR);
+                g2.setStroke(new java.awt.BasicStroke(2.5f, java.awt.BasicStroke.CAP_ROUND,
+                        java.awt.BasicStroke.JOIN_ROUND));
+                g2.drawArc(sx, sy, spinnerSize, spinnerSize, (int) spinAngle, 270);
+
+                // "Loading..." text below spinner
+                g2.setFont(getFont().deriveFont(Font.PLAIN, 10f));
+                g2.setColor(LOADING_TEXT_COLOR);
+                java.awt.FontMetrics fm = g2.getFontMetrics();
+                String loadText = "Loading...";
+                int tx = (w - fm.stringWidth(loadText)) / 2;
+                int ty = sy + spinnerSize + fm.getHeight() + 4;
+                g2.drawString(loadText, tx, ty);
+
                 g2.dispose();
 
                 // Draw text (extension) on top of shimmer
