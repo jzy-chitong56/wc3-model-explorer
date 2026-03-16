@@ -6,13 +6,21 @@ import org.example.parser.*;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.DefaultTreeCellRenderer;
+import javax.swing.tree.DefaultTreeModel;
+import javax.swing.tree.TreePath;
 import java.awt.*;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseMotionAdapter;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.nio.file.Path;
 import java.text.NumberFormat;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Model viewer dialog with a split-pane layout:
@@ -170,6 +178,9 @@ public final class ModelViewerDialog extends JDialog {
         tabs.addTab("Info", buildInfoTab());
         tabs.addTab("Textures", buildTexturesTab());
         tabs.addTab("Materials", buildMaterialsTab());
+        if (parsedModel.animData().bones().length > 0) {
+            tabs.addTab("Nodes", buildNodesTab());
+        }
 
         return tabs;
     }
@@ -632,6 +643,94 @@ public final class ModelViewerDialog extends JDialog {
         JScrollPane scroll = new JScrollPane(area);
         panel.add(scroll, BorderLayout.CENTER);
         return panel;
+    }
+
+    // ── Nodes tab ─────────────────────────────────────────────────────────
+
+    private JScrollPane buildNodesTab() {
+        BoneNode[] bones = parsedModel.animData().bones();
+
+        // Build tree nodes indexed by objectId
+        Map<Integer, DefaultMutableTreeNode> nodeMap = new HashMap<>();
+        DefaultMutableTreeNode root = new DefaultMutableTreeNode("Model");
+
+        for (BoneNode bone : bones) {
+            String label = bone.name().isEmpty()
+                    ? bone.nodeType() + " #" + bone.objectId()
+                    : bone.name() + " [" + bone.nodeType() + "]";
+            DefaultMutableTreeNode treeNode = new DefaultMutableTreeNode(new NodeEntry(bone, label));
+            nodeMap.put(bone.objectId(), treeNode);
+        }
+
+        // Build hierarchy
+        for (BoneNode bone : bones) {
+            DefaultMutableTreeNode treeNode = nodeMap.get(bone.objectId());
+            if (bone.parentId() < 0 || !nodeMap.containsKey(bone.parentId())) {
+                root.add(treeNode);
+            } else {
+                nodeMap.get(bone.parentId()).add(treeNode);
+            }
+        }
+
+        JTree tree = new JTree(new DefaultTreeModel(root));
+        tree.setRootVisible(true);
+        tree.setShowsRootHandles(true);
+
+        // Custom renderer with node type icons/colors
+        tree.setCellRenderer(new DefaultTreeCellRenderer() {
+            @Override
+            public Component getTreeCellRendererComponent(JTree tree, Object value,
+                    boolean sel, boolean expanded, boolean leaf, int row, boolean hasFocus) {
+                super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus);
+                if (value instanceof DefaultMutableTreeNode dmtn
+                        && dmtn.getUserObject() instanceof NodeEntry entry) {
+                    setText(entry.label);
+                    switch (entry.bone.nodeType()) {
+                        case BONE       -> setForeground(sel ? getForeground() : new Color(200, 150, 50));
+                        case HELPER     -> setForeground(sel ? getForeground() : new Color(180, 180, 60));
+                        case ATTACHMENT -> setForeground(sel ? getForeground() : new Color(60, 180, 200));
+                    }
+                }
+                return this;
+            }
+        });
+
+        // Hover listener: highlight bone on the 3D mesh
+        tree.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                TreePath path = tree.getPathForLocation(e.getX(), e.getY());
+                if (path != null) {
+                    Object node = ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
+                    if (node instanceof NodeEntry entry) {
+                        if (previewCanvas != null) previewCanvas.setHighlightedBoneId(entry.bone.objectId());
+                        return;
+                    }
+                }
+                if (previewCanvas != null) previewCanvas.setHighlightedBoneId(-1);
+            }
+        });
+
+        // Clear highlight when mouse exits the tree
+        tree.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseExited(MouseEvent e) {
+                if (previewCanvas != null) previewCanvas.setHighlightedBoneId(-1);
+            }
+        });
+
+        // Expand all by default
+        for (int i = 0; i < tree.getRowCount(); i++) {
+            tree.expandRow(i);
+        }
+
+        JScrollPane scroll = new JScrollPane(tree);
+        scroll.getVerticalScrollBar().setUnitIncrement(12);
+        return scroll;
+    }
+
+    private record NodeEntry(BoneNode bone, String label) {
+        @Override public String toString() { return label; }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

@@ -54,6 +54,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile boolean showGrid = true;
     private volatile boolean showCollision;
     private volatile float   nodeSize = 3.0f;
+    private volatile int     highlightedBoneId = -1; // objectId of hovered node, -1 = none
     private volatile float bgR = 0.06f, bgG = 0.08f, bgB = 0.11f;
     private int     lastMouseX, lastMouseY;
     private boolean draggingOrbit, draggingPan;
@@ -69,7 +70,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private CountDownLatch     renderStopped;
 
     // GL resources (all initialised in initGL on the render thread)
-    private int solidShader = 0, solidMvp = -1, solidColor = -1;
+    private int solidShader = 0, solidMvp = -1, solidColor = -1, solidAlpha = -1;
     private int texShader   = 0, texMvp   = -1, texSampler = -1, texHasTex = -1, texAlphaThresh = -1, texAlphaU = -1, texUVTransform = -1;
     private int litShader   = 0, litMvp   = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1;
     private int normalsShader = 0, normalsMvp = -1;
@@ -81,6 +82,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     // Per-geoset arrays for Textured mode (one entry per mesh-included geoset)
     private int[] geoVao, geoVbo, geoUvVbo, geoEbo, geoIndexCount, geoTex, geoVertCount;
+    private int[][] geoIndices; // cached index data per geoset (for highlight picking)
+    private int highlightEbo = 0; // reusable EBO for bone highlight overlay
 
     private int cubeVao = 0, cubeVbo = 0, cubeEbo = 0;
     private int nodeCubeVao = 0, nodeCubeVbo = 0, nodeCubeEbo = 0;
@@ -118,8 +121,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     static final String SOLID_FRAG =
         "#version 330 core\n" +
         "uniform vec3 uColor;\n" +
+        "uniform float uAlpha;\n" +
         "out vec4 fragColor;\n" +
-        "void main(){ fragColor = vec4(uColor,1.0); }\n";
+        "void main(){ fragColor = vec4(uColor, uAlpha); }\n";
 
     static final String TEX_VERT =
         "#version 330 core\n" +
@@ -326,6 +330,13 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         float[] proj = buildProjection(45f, (float)w/h, 4f, 10000f);
         float[] modelMvp = matMul(proj, buildModelView());
 
+        // Set default alpha for solid shader (highlight pass changes this)
+        if (solidShader != 0) {
+            glUseProgram(solidShader);
+            glUniform1f(solidAlpha, 1.0f);
+            glUseProgram(0);
+        }
+
         // Grid (Z-up model space, XY plane at Z=0)
         if (showGrid && solidShader != 0) {
             glUseProgram(solidShader);
@@ -369,6 +380,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 drawTextured(modelMvp);
             } else if (solidShader != 0 && meshVao != 0) {
                 drawSolid(modelMvp);
+            }
+            // Bone highlight overlay
+            if (highlightedBoneId >= 0 && geoVao != null && solidShader != 0) {
+                drawBoneHighlight(modelMvp);
             }
             // Extent overlay (bounding box wireframe)
             if (showExtent && extentVao != 0 && solidShader != 0) {
@@ -512,6 +527,93 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
         }
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glBindVertexArray(0);
+        glUseProgram(0);
+    }
+
+    /**
+     * Draws a semi-transparent overlay on triangles assigned to the highlighted bone.
+     * For each geoset, builds a vertex mask based on bone assignment, then re-draws
+     * matching triangles (where at least one vertex is influenced by the bone).
+     */
+    private void drawBoneHighlight(float[] mvp) {
+        int boneId = highlightedBoneId;
+        if (boneId < 0) return;
+
+        glUseProgram(solidShader);
+        glUniformMatrix4fv(solidMvp, false, mvp);
+        glUniform3f(solidColor, 0.2f, 0.85f, 1.0f); // bright cyan highlight
+        glUniform1f(solidAlpha, 0.45f);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(false);
+        // Slight offset to avoid z-fighting
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(-1f, -1f);
+
+        java.util.List<GeosetSkinData> skins = animData.geosets();
+        int gi = 0;
+        for (GeosetSkinData skin : skins) {
+            if (skin.vertexCount() == 0) continue;
+            if (gi >= geoVao.length || geoVao[gi] == 0) { gi++; continue; }
+
+            // Build vertex mask: which vertices are influenced by this bone?
+            boolean[] vertMask = new boolean[skin.vertexCount()];
+            boolean anyMatch = false;
+            if (skin.hasSkinning()) {
+                int[] vg = skin.vertexGroup();
+                int[][] groups = skin.groupBoneObjectIds();
+                for (int vi = 0; vi < skin.vertexCount(); vi++) {
+                    int grp = (vg != null && vi < vg.length) ? vg[vi] : 0;
+                    if (grp < groups.length) {
+                        for (int bid : groups[grp]) {
+                            if (bid == boneId) { vertMask[vi] = true; anyMatch = true; break; }
+                        }
+                    }
+                }
+            }
+            if (!anyMatch) { gi++; continue; }
+
+            // Use cached index data to filter triangles
+            int[] indices = (geoIndices != null && gi < geoIndices.length) ? geoIndices[gi] : null;
+            if (indices == null) { gi++; continue; }
+            int idxCount = indices.length;
+
+            // Filter triangles
+            int[] highlighted = new int[idxCount];
+            int hCount = 0;
+            for (int t = 0; t + 2 < idxCount; t += 3) {
+                int i0 = indices[t], i1 = indices[t+1], i2 = indices[t+2];
+                if ((i0 < vertMask.length && vertMask[i0])
+                 || (i1 < vertMask.length && vertMask[i1])
+                 || (i2 < vertMask.length && vertMask[i2])) {
+                    highlighted[hCount++] = i0;
+                    highlighted[hCount++] = i1;
+                    highlighted[hCount++] = i2;
+                }
+            }
+
+            if (hCount > 0) {
+                // Ensure reusable highlight EBO exists
+                if (highlightEbo == 0) highlightEbo = glGenBuffers();
+                // Copy to a correctly-sized array for glBufferData(int[])
+                int[] trimmed = new int[hCount];
+                System.arraycopy(highlighted, 0, trimmed, 0, hCount);
+                glBindVertexArray(geoVao[gi]);
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, highlightEbo);
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, trimmed, GL_STREAM_DRAW);
+                glDrawElements(GL_TRIANGLES, hCount, GL_UNSIGNED_INT, 0L);
+                // Restore original EBO on the VAO
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, geoEbo[gi]);
+            }
+
+            gi++;
+        }
+
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glDepthMask(true);
+        glDisable(GL_BLEND);
+        glUniform1f(solidAlpha, 1.0f);
         glBindVertexArray(0);
         glUseProgram(0);
     }
@@ -875,6 +977,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public void setShowGrid(boolean g)       { showGrid = g; }
     public void setShowCollision(boolean c)  { showCollision = c; }
     public void setNodeSize(float s)         { nodeSize = Math.max(0.5f, Math.min(20f, s)); }
+    public void setHighlightedBoneId(int id) { highlightedBoneId = id; }
 
     /** Snaps the camera to the model's camera node position/target. */
     public void applyCameraView(CameraNode cam) {
@@ -1068,7 +1171,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     private void compileSolidShader() {
         solidShader = linkProgram(SOLID_VERT, SOLID_FRAG);
-        if (solidShader != 0) { solidMvp = glGetUniformLocation(solidShader,"mvp"); solidColor = glGetUniformLocation(solidShader,"uColor"); }
+        if (solidShader != 0) { solidMvp = glGetUniformLocation(solidShader,"mvp"); solidColor = glGetUniformLocation(solidShader,"uColor"); solidAlpha = glGetUniformLocation(solidShader,"uAlpha"); }
     }
     private void compileTexShader() {
         texShader = linkProgram(TEX_VERT, TEX_FRAG);
@@ -1140,6 +1243,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         geoIndexCount= new int[geoCount];
         geoTex       = new int[geoCount];
         geoVertCount = new int[geoCount];
+        geoIndices   = new int[geoCount][];
 
         int[] allIndices = mesh.indices();
         int vertOffset   = 0;
@@ -1165,6 +1269,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
                 int[] indices = new int[faceCount];
                 for (int ii = 0; ii < faceCount; ii++) indices[ii] = allIndices[indexOffset + ii] - vertOffset;
+                geoIndices[gi] = indices;
 
                 int usage = animData.hasAnimation() ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
                 geoVao[gi]        = glGenVertexArrays();
