@@ -27,7 +27,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private static final float MIN_DISTANCE = 30.0f;
     private static final float MAX_DISTANCE = 3000.0f;
 
-    public enum ShadingMode { SOLID, TEXTURED, LIT, NORMALS }
+    public enum ShadingMode { SOLID, TEXTURED, LIT, NORMALS, GEOSET_COLORS }
 
     private final ModelMesh         mesh;
     private final ModelAnimData     animData;
@@ -373,7 +373,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 // Even without a selected sequence, global texture animations should run
                 sampleTextureAnims();
             }
-            if (shadingMode == ShadingMode.NORMALS && normalsShader != 0 && geoVao != null) {
+            if (shadingMode == ShadingMode.GEOSET_COLORS && solidShader != 0 && geoVao != null) {
+                drawGeosetColors(modelMvp);
+            } else if (shadingMode == ShadingMode.NORMALS && normalsShader != 0 && geoVao != null) {
                 drawNormals(modelMvp);
             } else if (shadingMode == ShadingMode.LIT && litShader != 0 && geoVao != null) {
                 drawLit(modelMvp);
@@ -528,6 +530,54 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             glBindVertexArray(geoVao[gi]);
             glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
         }
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glBindVertexArray(0);
+        glUseProgram(0);
+    }
+
+    // Distinct hues for geoset coloring (saturated, evenly spaced around the color wheel)
+    private static final float[][] GEOSET_PALETTE = {
+        {0.90f, 0.30f, 0.25f}, // red
+        {0.25f, 0.75f, 0.40f}, // green
+        {0.30f, 0.55f, 0.95f}, // blue
+        {0.95f, 0.75f, 0.20f}, // yellow
+        {0.80f, 0.35f, 0.85f}, // purple
+        {0.20f, 0.85f, 0.85f}, // cyan
+        {0.95f, 0.55f, 0.20f}, // orange
+        {0.65f, 0.85f, 0.30f}, // lime
+        {0.90f, 0.45f, 0.65f}, // pink
+        {0.40f, 0.65f, 0.80f}, // steel blue
+        {0.75f, 0.60f, 0.35f}, // tan
+        {0.55f, 0.80f, 0.65f}, // mint
+    };
+
+    private void drawGeosetColors(float[] mvp) {
+        glUseProgram(solidShader);
+        glUniformMatrix4fv(solidMvp, false, mvp);
+        glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
+
+        for (int gi = 0; gi < geoVao.length; gi++) {
+            if (geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
+            float[] c = GEOSET_PALETTE[gi % GEOSET_PALETTE.length];
+            glUniform3f(solidColor, c[0], c[1], c[2]);
+            glBindVertexArray(geoVao[gi]);
+            glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
+        }
+
+        // Edge overlay
+        if (!wireframe) {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            glEnable(GL_POLYGON_OFFSET_LINE);
+            glPolygonOffset(-1f, -1f);
+            glUniform3f(solidColor, 0.12f, 0.12f, 0.12f);
+            for (int gi = 0; gi < geoVao.length; gi++) {
+                if (geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
+                glBindVertexArray(geoVao[gi]);
+                glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
+            }
+            glDisable(GL_POLYGON_OFFSET_LINE);
+        }
+
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glBindVertexArray(0);
         glUseProgram(0);
