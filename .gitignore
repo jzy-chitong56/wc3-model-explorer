@@ -1,16 +1,14 @@
-.gradle
-.gradle-user-home/
+### Gradle ###
+.gradle/
+.gradle-user-home*/
 build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
-.kotlin
+.kotlin/
 
 ### IntelliJ IDEA ###
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
+.idea/
 *.iws
 *.iml
 *.ipr
@@ -40,5 +38,17 @@ bin/
 ### VS Code ###
 .vscode/
 
-### Mac OS ###
+### OS ###
 .DS_Store
+Thumbs.db
+
+### JVM crash logs ###
+hs_err_pid*.log
+
+### Claude Code ###
+.claude/
+
+### Project-specific ###
+libs/
+com/
+PLANS.md

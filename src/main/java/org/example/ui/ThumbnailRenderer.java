@@ -73,7 +73,7 @@ public final class ThumbnailRenderer {
 
     // GL resources (initialized once in paintGL on first call)
     private int fbo, fboColorTex, fboDepthRbo;
-    private int texShader, texMvpLoc, texSamplerLoc, texHasTexLoc, texAlphaThreshLoc, texAlphaLoc;
+    private int texShader, texMvpLoc, texSamplerLoc, texHasTexLoc, texAlphaThreshLoc, texAlphaLoc, texUVTransformLoc;
     private boolean glInitialized;
 
     // Background color
@@ -225,6 +225,7 @@ public final class ThumbnailRenderer {
             texHasTexLoc = glGetUniformLocation(texShader, "uHasTex");
             texAlphaThreshLoc = glGetUniformLocation(texShader, "uAlphaThreshold");
             texAlphaLoc = glGetUniformLocation(texShader, "uAlpha");
+            texUVTransformLoc = glGetUniformLocation(texShader, "uUVTransform");
         }
 
         fbo = glGenFramebuffers();
@@ -297,22 +298,42 @@ public final class ThumbnailRenderer {
             thumbSeq = findSequence(animData.sequences(), animationName);
             if (thumbSeq != null) {
                 boneMatrices = BoneAnimator.computeWorldMatrices(
-                        animData.bones(), thumbSeq.start(), thumbSeq.start(), thumbSeq.end());
+                        animData.bones(), thumbSeq.start(), thumbSeq.start(), thumbSeq.end(), animData.globalSequences());
             }
         }
+
+        long[] globalSeqs = animData.globalSequences();
 
         // Sample per-geoset alpha (KGAO visibility) at the first frame
         float[] geoAlpha = new float[geoCount];
         java.util.Arrays.fill(geoAlpha, 1.0f);
-        if (thumbSeq != null) {
+        {
+            long t = thumbSeq != null ? thumbSeq.start() : 0;
+            long s0 = thumbSeq != null ? thumbSeq.start() : 0;
+            long s1 = thumbSeq != null ? thumbSeq.end() : 0;
             for (int i = 0; i < geoCount; i++) {
                 AnimTrack track = animData.geosetAlpha().get(i);
-                if (track != null && !track.isEmpty()
-                        && hasKeysInRange(track, thumbSeq.start(), thumbSeq.end())) {
-                    float val = BoneAnimator.interpScalar(
-                            track, thumbSeq.start(), thumbSeq.start(), thumbSeq.end(), 1f);
+                if (track != null && !track.isEmpty()) {
+                    float val = BoneAnimator.interpTrackScalar(track, t, s0, s1, globalSeqs, 1f);
                     geoAlpha[i] = Math.max(0f, Math.min(1f, val));
                 }
+            }
+        }
+
+        // Sample per-geoset UV transforms at the first frame
+        float[][] geoUVTransforms = new float[geoCount][];
+        {
+            Map<Integer, TextureAnimTracks> taMap = animData.textureAnims();
+            long t = thumbSeq != null ? thumbSeq.start() : 0;
+            long s0 = thumbSeq != null ? thumbSeq.start() : 0;
+            long s1 = thumbSeq != null ? thumbSeq.end() : 0;
+            for (int i = 0; i < geoCount; i++) {
+                TextureAnimTracks ta = taMap.get(i);
+                if (ta == null || !ta.hasAnimation()) continue;
+                float[] trans = BoneAnimator.interpTrackVec3(ta.translation(), t, s0, s1, globalSeqs, 0, 0, 0);
+                float[] rot = BoneAnimator.interpTrackQuat(ta.rotation(), t, s0, s1, globalSeqs);
+                float[] scl = BoneAnimator.interpTrackVec3(ta.scale(), t, s0, s1, globalSeqs, 1, 1, 1);
+                geoUVTransforms[i] = GlPreviewCanvas.buildUVTransformMatrix(trans, rot, scl);
             }
         }
 
@@ -440,6 +461,7 @@ public final class ThumbnailRenderer {
             if (geoVao[i] == 0 || geoIndexCount[i] == 0) continue;
             if (!texData[i].isOpaque()) continue;
             if (geoAlpha[i] <= 0f) continue;
+            setUVTransform(geoUVTransforms, i);
             drawGeoset(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i]);
         }
 
@@ -455,6 +477,7 @@ public final class ThumbnailRenderer {
             } else {
                 GlPreviewCanvas.applyBlendMode(texData[i].filterMode());
             }
+            setUVTransform(geoUVTransforms, i);
             drawGeoset(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i]);
         }
         glDepthMask(true);
@@ -501,6 +524,14 @@ public final class ThumbnailRenderer {
         }
 
         return img;
+    }
+
+    private static final float[] IDENTITY_4X4 = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+
+    private void setUVTransform(float[][] geoUVTransforms, int gi) {
+        if (texUVTransformLoc < 0) return;
+        float[] m = (gi < geoUVTransforms.length) ? geoUVTransforms[gi] : null;
+        glUniformMatrix4fv(texUVTransformLoc, false, m != null ? m : IDENTITY_4X4);
     }
 
     private void drawGeoset(int gi, int[] geoVao, int[] geoIndexCount, int[] geoTex,

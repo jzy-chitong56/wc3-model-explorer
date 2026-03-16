@@ -332,23 +332,35 @@ public final class MainWindow extends JFrame {
     }
 
     private void showAssetContextMenu(ModelAsset asset, java.awt.Component comp, int x, int y) {
-        List<ExternalProgram> programs = settings.externalPrograms();
-        if (programs.isEmpty()) return;
-
         javax.swing.JPopupMenu popup = new javax.swing.JPopupMenu();
-        if (programs.size() == 1) {
-            ExternalProgram p = programs.get(0);
-            javax.swing.JMenuItem item = new javax.swing.JMenuItem("Open in " + p.name());
-            item.addActionListener(e -> openInExternalProgram(p, asset));
-            popup.add(item);
-        } else {
-            javax.swing.JMenu submenu = new javax.swing.JMenu("Open in…");
-            for (ExternalProgram p : programs) {
-                javax.swing.JMenuItem item = new javax.swing.JMenuItem(p.name());
+
+        // Copy path
+        javax.swing.JMenuItem copyPathItem = new javax.swing.JMenuItem("Copy Path");
+        copyPathItem.addActionListener(e -> {
+            String path = asset.path().toAbsolutePath().toString();
+            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .setContents(new java.awt.datatransfer.StringSelection(path), null);
+        });
+        popup.add(copyPathItem);
+
+        // External programs
+        List<ExternalProgram> programs = settings.externalPrograms();
+        if (!programs.isEmpty()) {
+            popup.addSeparator();
+            if (programs.size() == 1) {
+                ExternalProgram p = programs.get(0);
+                javax.swing.JMenuItem item = new javax.swing.JMenuItem("Open in " + p.name());
                 item.addActionListener(e -> openInExternalProgram(p, asset));
-                submenu.add(item);
+                popup.add(item);
+            } else {
+                javax.swing.JMenu submenu = new javax.swing.JMenu("Open in…");
+                for (ExternalProgram p : programs) {
+                    javax.swing.JMenuItem item = new javax.swing.JMenuItem(p.name());
+                    item.addActionListener(e -> openInExternalProgram(p, asset));
+                    submenu.add(item);
+                }
+                popup.add(submenu);
             }
-            popup.add(submenu);
         }
         popup.show(comp, x, y);
     }

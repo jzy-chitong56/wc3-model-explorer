@@ -16,6 +16,7 @@ import com.hiveworkshop.rms.parsers.mdlx.MdlxCollisionShape;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxModel;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxSequence;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxTexture;
+import com.hiveworkshop.rms.parsers.mdlx.MdlxTextureAnimation;
 import com.hiveworkshop.rms.parsers.mdlx.MdxLoadSave;
 import com.hiveworkshop.rms.parsers.mdlx.InterpolationType;
 import com.hiveworkshop.rms.parsers.mdlx.timeline.MdlxTimeline;
@@ -361,8 +362,70 @@ public final class ReterasModelParser {
             geosetStaticAlpha.put(mi, ga.alpha);
         }
 
+        // Texture animations (KTAT/KTAR/KTAS) — indexed by textureAnimationId
+        TextureAnimTracks[] texAnimArray = extractTextureAnims(model);
+
+        // Map geoset → texture animation via material layer's textureAnimationId
+        Map<Integer, TextureAnimTracks> textureAnims = new HashMap<>();
+        meshIdx = 0;
+        for (int oi = 0; oi < model.geosets.size(); oi++) {
+            MdlxGeoset g = model.geosets.get(oi);
+            if (g == null || g.vertices == null || g.faces == null
+                    || g.vertices.length < 3 || g.faces.length < 3) continue;
+            int mi = meshIdx++;
+            int matId = (int) g.materialId;
+            if (matId < 0 || matId >= model.materials.size()) continue;
+            MdlxMaterial mat = model.materials.get(matId);
+            if (mat == null) continue;
+            // Use the first layer that references a texture animation
+            for (MdlxLayer layer : mat.layers) {
+                if (layer == null) continue;
+                int taId = layer.textureAnimationId;
+                if (taId >= 0 && taId < texAnimArray.length && texAnimArray[taId].hasAnimation()) {
+                    textureAnims.put(mi, texAnimArray[taId]);
+                    break;
+                }
+            }
+        }
+
+        // Global sequences (loop durations for global animations like texture anims)
+        long[] globalSeqs = new long[0];
+        if (model.globalSequences != null && !model.globalSequences.isEmpty()) {
+            globalSeqs = new long[model.globalSequences.size()];
+            for (int i = 0; i < globalSeqs.length; i++) {
+                globalSeqs[i] = model.globalSequences.get(i);
+            }
+        }
+
         return new ModelAnimData(List.copyOf(sequences), bones, List.copyOf(geosets),
-                Map.copyOf(geosetAlpha), Map.copyOf(geosetStaticAlpha));
+                Map.copyOf(geosetAlpha), Map.copyOf(geosetStaticAlpha), Map.copyOf(textureAnims), globalSeqs);
+    }
+
+    /** Extract texture animation tracks from model.textureAnimations. */
+    private static TextureAnimTracks[] extractTextureAnims(MdlxModel model) {
+        if (model.textureAnimations == null || model.textureAnimations.isEmpty()) {
+            return new TextureAnimTracks[0];
+        }
+        TextureAnimTracks[] result = new TextureAnimTracks[model.textureAnimations.size()];
+        for (int i = 0; i < model.textureAnimations.size(); i++) {
+            MdlxTextureAnimation ta = model.textureAnimations.get(i);
+            if (ta == null) { result[i] = TextureAnimTracks.EMPTY; continue; }
+            AnimTrack trans = AnimTrack.EMPTY;
+            AnimTrack rot   = AnimTrack.EMPTY;
+            AnimTrack scale = AnimTrack.EMPTY;
+            for (MdlxTimeline<?> tl : ta.timelines) {
+                if (tl == null || tl.name == null) continue;
+                String tag = tl.name.asStringValue();
+                AnimTrack extracted = extractTrack(tl);
+                switch (tag) {
+                    case "KTAT" -> trans = extracted;
+                    case "KTAR" -> rot   = extracted;
+                    case "KTAS" -> scale = extracted;
+                }
+            }
+            result[i] = new TextureAnimTracks(trans, rot, scale);
+        }
+        return result;
     }
 
     /** Extract an AnimTrack from a generic MdlxTimeline<?> (handles float[] values). */
@@ -377,7 +440,7 @@ public final class ReterasModelParser {
 
         int interp = (tl.interpolationType != null) ? tl.interpolationType.ordinal() : 1;
 
-        return new AnimTrack(tl.frames.clone(), values, inTans, outTans, interp);
+        return new AnimTrack(tl.frames.clone(), values, inTans, outTans, interp, tl.globalSequenceId);
     }
 
     private static float[][] toFloat2D(Object[] raw, int n) {

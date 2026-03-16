@@ -32,6 +32,11 @@ public final class BoneAnimator {
      */
     public static Map<Integer, float[]> computeWorldMatrices(
             BoneNode[] bones, long timeMs, long seqStart, long seqEnd) {
+        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, null);
+    }
+
+    public static Map<Integer, float[]> computeWorldMatrices(
+            BoneNode[] bones, long timeMs, long seqStart, long seqEnd, long[] globalSequences) {
 
         Map<Integer, float[]> worldMatrices = new HashMap<>(bones.length * 2);
         Map<Integer, float[]> worldRotations = new HashMap<>(bones.length * 2);
@@ -39,7 +44,7 @@ public final class BoneAnimator {
         for (BoneNode b : bones) byId.put(b.objectId(), b);
 
         for (BoneNode bone : bones) {
-            computeWorldMatrix(bone, byId, worldMatrices, worldRotations, timeMs, seqStart, seqEnd);
+            computeWorldMatrix(bone, byId, worldMatrices, worldRotations, timeMs, seqStart, seqEnd, globalSequences);
         }
         return worldMatrices;
     }
@@ -51,7 +56,7 @@ public final class BoneAnimator {
             Map<Integer, BoneNode> byId,
             Map<Integer, float[]> matCache,
             Map<Integer, float[]> rotCache,
-            long t, long s0, long s1) {
+            long t, long s0, long s1, long[] globalSequences) {
 
         if (matCache.containsKey(bone.objectId())) {
             return matCache.get(bone.objectId());
@@ -63,7 +68,7 @@ public final class BoneAnimator {
         if (bone.parentId() >= 0) {
             BoneNode parent = byId.get(bone.parentId());
             if (parent != null) {
-                computeWorldMatrix(parent, byId, matCache, rotCache, t, s0, s1);
+                computeWorldMatrix(parent, byId, matCache, rotCache, t, s0, s1, globalSequences);
                 parentWorldMatrix = matCache.getOrDefault(parent.objectId(), IDENTITY);
                 parentWorldRot = rotCache.getOrDefault(parent.objectId(), IDENTITY_QUAT);
             }
@@ -75,9 +80,9 @@ public final class BoneAnimator {
         float py = p != null && p.length > 1 ? p[1] : 0f;
         float pz = p != null && p.length > 2 ? p[2] : 0f;
 
-        float[] tr = interpVec3(bone.trans(), t, s0, s1, 0f, 0f, 0f);
-        float[] localRot = interpQuat(bone.rot(), t, s0, s1);
-        float[] sc = interpVec3(bone.scale(), t, s0, s1, 1f, 1f, 1f);
+        float[] tr = interpTrackVec3(bone.trans(), t, s0, s1, globalSequences, 0f, 0f, 0f);
+        float[] localRot = interpTrackQuat(bone.rot(), t, s0, s1, globalSequences);
+        float[] sc = interpTrackVec3(bone.scale(), t, s0, s1, globalSequences, 1f, 1f, 1f);
 
         // Billboard: cancel parent world rotation so local rotation acts in world space
         float[] computedRot;
@@ -124,6 +129,50 @@ public final class BoneAnimator {
     /** Returns the inverse (conjugate) of a unit quaternion [x,y,z,w]. */
     private static float[] quatInverse(float[] q) {
         return new float[]{-q[0], -q[1], -q[2], q[3]};
+    }
+
+    // ── Global-sequence-aware dispatchers ───────────────────────────────────
+
+    /**
+     * Interpolate a Vec3 track, automatically using cyclic interpolation if the
+     * track has a globalSequenceId, otherwise standard sequence-range interpolation.
+     */
+    public static float[] interpTrackVec3(AnimTrack tk, long t, long s0, long s1,
+                                          long[] globalSequences, float defX, float defY, float defZ) {
+        if (tk == null || tk.isEmpty()) return new float[]{defX, defY, defZ};
+        int gsId = tk.globalSequenceId();
+        if (gsId >= 0 && globalSequences != null && gsId < globalSequences.length && globalSequences[gsId] > 0) {
+            return interpVec3Cyclic(tk, System.currentTimeMillis(), globalSequences[gsId], defX, defY, defZ);
+        }
+        return interpVec3(tk, t, s0, s1, defX, defY, defZ);
+    }
+
+    /**
+     * Interpolate a Quat track, automatically using cyclic interpolation if the
+     * track has a globalSequenceId.
+     */
+    public static float[] interpTrackQuat(AnimTrack tk, long t, long s0, long s1,
+                                          long[] globalSequences) {
+        if (tk == null || tk.isEmpty()) return new float[]{0f, 0f, 0f, 1f};
+        int gsId = tk.globalSequenceId();
+        if (gsId >= 0 && globalSequences != null && gsId < globalSequences.length && globalSequences[gsId] > 0) {
+            return interpQuatCyclic(tk, System.currentTimeMillis(), globalSequences[gsId]);
+        }
+        return interpQuat(tk, t, s0, s1);
+    }
+
+    /**
+     * Interpolate a scalar track, automatically using cyclic interpolation if the
+     * track has a globalSequenceId.
+     */
+    public static float interpTrackScalar(AnimTrack tk, long t, long s0, long s1,
+                                          long[] globalSequences, float def) {
+        if (tk == null || tk.isEmpty()) return def;
+        int gsId = tk.globalSequenceId();
+        if (gsId >= 0 && globalSequences != null && gsId < globalSequences.length && globalSequences[gsId] > 0) {
+            return interpScalarCyclic(tk, System.currentTimeMillis(), globalSequences[gsId], def);
+        }
+        return interpScalar(tk, t, s0, s1, def);
     }
 
     // ── Track interpolation ──────────────────────────────────────────────────
@@ -249,7 +298,7 @@ public final class BoneAnimator {
      * Sample a quaternion track at time t, returning [x,y,z,w].
      * Uses SLERP for all interpolation types (good enough for display).
      */
-    static float[] interpQuat(AnimTrack tk, long t, long s0, long s1) {
+    public static float[] interpQuat(AnimTrack tk, long t, long s0, long s1) {
         if (tk == null || tk.isEmpty()) return new float[]{0f, 0f, 0f, 1f};
 
         long[] frames = tk.frames();
@@ -408,6 +457,167 @@ public final class BoneAnimator {
             }
         }
         return r;
+    }
+
+    // ── Cyclic interpolation for global sequences ──────────────────────────
+
+    /**
+     * Sample a Vec3 track cyclically for a global sequence with the given period.
+     * Handles wrap-around: after the last keyframe, smoothly transitions back
+     * to the first keyframe to complete the loop.
+     */
+    public static float[] interpVec3Cyclic(AnimTrack tk, long t, long period,
+                                           float defX, float defY, float defZ) {
+        if (tk == null || tk.isEmpty()) return new float[]{defX, defY, defZ};
+        long[] frames = tk.frames();
+        float[][] values = tk.values();
+        int n = frames.length;
+        if (n == 0) return new float[]{defX, defY, defZ};
+        if (n == 1) return copy3(values[0]);
+
+        // Wrap time to [0, period)
+        t = ((t % period) + period) % period;
+
+        // Find bracket keyframes
+        int lo = -1, hi = -1;
+        for (int i = 0; i < n; i++) {
+            if (frames[i] <= t) lo = i;
+            if (frames[i] > t && hi < 0) hi = i;
+        }
+
+        // Exact hit on a keyframe
+        if (lo >= 0 && hi < 0 && frames[lo] == t) return copy3(values[lo]);
+        if (lo >= 0 && hi >= 0 && frames[lo] == t) return copy3(values[lo]);
+
+        // Normal bracket: both found
+        if (lo >= 0 && hi >= 0) {
+            long t0 = frames[lo], t1 = frames[hi];
+            if (t1 == t0) return copy3(values[lo]);
+            float alpha = (float)(t - t0) / (float)(t1 - t0);
+            return interpVec3Switch(tk, lo, hi, alpha);
+        }
+
+        // Wrap case: t is past last keyframe, wrapping to first
+        if (lo >= 0 && hi < 0) {
+            long gap = (period - frames[lo]) + frames[0];
+            if (gap <= 0) return copy3(values[lo]);
+            float alpha = (float)(t - frames[lo]) / (float)gap;
+            return lerpVec3(values[lo], values[0], alpha);
+        }
+
+        // t is before first keyframe, wrapping from last
+        if (lo < 0 && hi >= 0) {
+            int last = n - 1;
+            long gap = (period - frames[last]) + frames[hi];
+            if (gap <= 0) return copy3(values[hi]);
+            float alpha = (float)((period - frames[last]) + t) / (float)gap;
+            return lerpVec3(values[last], values[hi], alpha);
+        }
+
+        return new float[]{defX, defY, defZ};
+    }
+
+    /**
+     * Sample a quaternion track cyclically for a global sequence with the given period.
+     */
+    public static float[] interpQuatCyclic(AnimTrack tk, long t, long period) {
+        if (tk == null || tk.isEmpty()) return new float[]{0f, 0f, 0f, 1f};
+        long[] frames = tk.frames();
+        float[][] values = tk.values();
+        int n = frames.length;
+        if (n == 0) return new float[]{0f, 0f, 0f, 1f};
+        if (n == 1) return copy4(values[0]);
+
+        t = ((t % period) + period) % period;
+
+        int lo = -1, hi = -1;
+        for (int i = 0; i < n; i++) {
+            if (frames[i] <= t) lo = i;
+            if (frames[i] > t && hi < 0) hi = i;
+        }
+
+        if (lo >= 0 && frames[lo] == t) return copy4(values[lo]);
+
+        if (lo >= 0 && hi >= 0) {
+            long t0 = frames[lo], t1 = frames[hi];
+            if (t1 == t0) return copy4(values[lo]);
+            float alpha = (float)(t - t0) / (float)(t1 - t0);
+            return (tk.interp() == 0) ? copy4(values[lo]) : slerp(values[lo], values[hi], alpha);
+        }
+
+        if (lo >= 0 && hi < 0) {
+            long gap = (period - frames[lo]) + frames[0];
+            if (gap <= 0) return copy4(values[lo]);
+            float alpha = (float)(t - frames[lo]) / (float)gap;
+            return slerp(values[lo], values[0], alpha);
+        }
+
+        if (lo < 0 && hi >= 0) {
+            int last = n - 1;
+            long gap = (period - frames[last]) + frames[hi];
+            if (gap <= 0) return copy4(values[hi]);
+            float alpha = (float)((period - frames[last]) + t) / (float)gap;
+            return slerp(values[last], values[hi], alpha);
+        }
+
+        return new float[]{0f, 0f, 0f, 1f};
+    }
+
+    /**
+     * Sample a scalar track cyclically for a global sequence with the given period.
+     */
+    public static float interpScalarCyclic(AnimTrack tk, long t, long period, float def) {
+        if (tk == null || tk.isEmpty()) return def;
+        long[] frames = tk.frames();
+        float[][] values = tk.values();
+        int n = frames.length;
+        if (n == 0) return def;
+        if (n == 1) return scalar(values[0]);
+
+        t = ((t % period) + period) % period;
+
+        int lo = -1, hi = -1;
+        for (int i = 0; i < n; i++) {
+            if (frames[i] <= t) lo = i;
+            if (frames[i] > t && hi < 0) hi = i;
+        }
+
+        if (lo >= 0 && frames[lo] == t) return scalar(values[lo]);
+
+        if (lo >= 0 && hi >= 0) {
+            long t0 = frames[lo], t1 = frames[hi];
+            if (t1 == t0) return scalar(values[lo]);
+            float alpha = (float)(t - t0) / (float)(t1 - t0);
+            return (tk.interp() == 0) ? scalar(values[lo]) : lerpScalar(scalar(values[lo]), scalar(values[hi]), alpha);
+        }
+
+        if (lo >= 0 && hi < 0) {
+            long gap = (period - frames[lo]) + frames[0];
+            if (gap <= 0) return scalar(values[lo]);
+            float alpha = (float)(t - frames[lo]) / (float)gap;
+            return lerpScalar(scalar(values[lo]), scalar(values[0]), alpha);
+        }
+
+        if (lo < 0 && hi >= 0) {
+            int last = n - 1;
+            long gap = (period - frames[last]) + frames[hi];
+            if (gap <= 0) return scalar(values[hi]);
+            float alpha = (float)((period - frames[last]) + t) / (float)gap;
+            return lerpScalar(scalar(values[last]), scalar(values[hi]), alpha);
+        }
+
+        return def;
+    }
+
+    private static float[] interpVec3Switch(AnimTrack tk, int lo, int hi, float alpha) {
+        float[] v0 = tk.values()[lo];
+        float[] v1 = tk.values()[hi];
+        return switch (tk.interp()) {
+            case 0 -> copy3(v0);
+            case 2 -> hermiteVec3(v0, tk.outTans()[lo], tk.inTans()[hi], v1, alpha);
+            case 3 -> bezierVec3(v0, tk.outTans()[lo], tk.inTans()[hi], v1, alpha);
+            default -> lerpVec3(v0, v1, alpha);
+        };
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
