@@ -338,6 +338,23 @@ public final class ThumbnailRenderer {
             }
         }
 
+        // Sample per-geoset color (KGAC tint) at the first frame
+        float[][] geoColor = new float[geoCount][];
+        {
+            long t = thumbSeq != null ? thumbSeq.start() : 0;
+            long s0 = thumbSeq != null ? thumbSeq.start() : 0;
+            long s1 = thumbSeq != null ? thumbSeq.end() : 0;
+            for (int i = 0; i < geoCount; i++) {
+                AnimTrack track = animData.geosetColor().get(i);
+                if (track != null && !track.isEmpty()) {
+                    geoColor[i] = BoneAnimator.interpTrackVec3(track, t, s0, s1, globalSeqs, 1f, 1f, 1f);
+                } else {
+                    float[] sc = animData.geosetStaticColor().get(i);
+                    if (sc != null) geoColor[i] = sc;
+                }
+            }
+        }
+
         // Track actual vertex bounds for camera framing
         float bMinX = Float.POSITIVE_INFINITY, bMinY = Float.POSITIVE_INFINITY, bMinZ = Float.POSITIVE_INFINITY;
         float bMaxX = Float.NEGATIVE_INFINITY, bMaxY = Float.NEGATIVE_INFINITY, bMaxZ = Float.NEGATIVE_INFINITY;
@@ -456,7 +473,6 @@ public final class ThumbnailRenderer {
 
         glUseProgram(texShader);
         glUniformMatrix4fv(texMvpLoc, false, mvp);
-        if (texGeosetColorLoc >= 0) glUniform3f(texGeosetColorLoc, 1f, 1f, 1f);
 
         // Pass 1: opaque
         for (int i = 0; i < geoCount; i++) {
@@ -464,6 +480,7 @@ public final class ThumbnailRenderer {
             if (!texData[i].isOpaque()) continue;
             if (geoAlpha[i] <= 0f) continue;
             setUVTransform(geoUVTransforms, i);
+            setGeosetColor(geoColor, i);
             drawGeoset(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i]);
         }
 
@@ -480,6 +497,7 @@ public final class ThumbnailRenderer {
                 GlPreviewCanvas.applyBlendMode(texData[i].filterMode());
             }
             setUVTransform(geoUVTransforms, i);
+            setGeosetColor(geoColor, i);
             drawGeoset(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i]);
         }
         glDepthMask(true);
@@ -534,6 +552,16 @@ public final class ThumbnailRenderer {
         if (texUVTransformLoc < 0) return;
         float[] m = (gi < geoUVTransforms.length) ? geoUVTransforms[gi] : null;
         glUniformMatrix4fv(texUVTransformLoc, false, m != null ? m : IDENTITY_4X4);
+    }
+
+    private void setGeosetColor(float[][] geoColor, int gi) {
+        if (texGeosetColorLoc < 0) return;
+        float[] c = (gi < geoColor.length) ? geoColor[gi] : null;
+        if (c != null) {
+            glUniform3f(texGeosetColorLoc, c[0], c[1], c[2]);
+        } else {
+            glUniform3f(texGeosetColorLoc, 1f, 1f, 1f);
+        }
     }
 
     private void drawGeoset(int gi, int[] geoVao, int[] geoIndexCount, int[] geoTex,
