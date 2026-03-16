@@ -600,49 +600,102 @@ public final class ModelViewerDialog extends JDialog {
         header.setBorder(new EmptyBorder(0, 0, 6, 0));
         panel.add(header, BorderLayout.NORTH);
 
-        JTextArea area = new JTextArea();
-        area.setEditable(false);
-        area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-
-        StringBuilder sb = new StringBuilder();
         GeosetTexData[] texData = parsedModel.texData();
         ModelAnimData animData = parsedModel.animData();
         NumberFormat fmt = NumberFormat.getIntegerInstance();
 
-        int vertOffset = 0;
+        // Build geoset info entries
+        DefaultListModel<GeosetEntry> listModel = new DefaultListModel<>();
         int gi = 0;
         for (GeosetSkinData skin : animData.geosets()) {
             int vc = skin.vertexCount();
             if (vc == 0) continue;
             if (gi >= texData.length) break;
 
-            sb.append("─── Geoset ").append(gi).append(" ───\n");
-            sb.append("  Vertices:    ").append(fmt.format(vc)).append('\n');
-            sb.append("  Has UVs:     ").append(texData[gi].hasUvs() ? "Yes" : "No").append('\n');
             String texPath = texData[gi].texturePath();
-            sb.append("  Texture:     ").append(texPath.isEmpty() ? "(none)" : texPath).append('\n');
-            sb.append("  Filter Mode: ").append(filterModeName(texData[gi].filterMode())).append('\n');
             int replId = texData[gi].replaceableId();
-            if (replId > 0) {
-                sb.append("  Replaceable: ").append(replId == 1 ? "TeamColor" : replId == 2 ? "TeamGlow" : String.valueOf(replId)).append('\n');
-            }
-            sb.append("  Skinning:    ").append(skin.hasSkinning() ? "Yes" : "No").append('\n');
-            sb.append('\n');
+            String replStr = replId == 1 ? "TeamColor" : replId == 2 ? "TeamGlow" : replId > 0 ? String.valueOf(replId) : null;
 
-            vertOffset += vc;
+            StringBuilder detail = new StringBuilder();
+            detail.append("Verts: ").append(fmt.format(vc));
+            detail.append("  Filter: ").append(filterModeName(texData[gi].filterMode()));
+            if (replStr != null) detail.append("  Repl: ").append(replStr);
+            if (skin.hasSkinning()) detail.append("  Skinned");
+
+            listModel.addElement(new GeosetEntry(gi, texPath.isEmpty() ? "(no texture)" : texPath, detail.toString()));
             gi++;
         }
 
-        if (sb.isEmpty()) {
-            sb.append("No geoset data available.");
+        if (listModel.isEmpty()) {
+            panel.add(new JLabel("No geoset data available.", JLabel.CENTER), BorderLayout.CENTER);
+            return panel;
         }
 
-        area.setText(sb.toString());
-        area.setCaretPosition(0);
+        JList<GeosetEntry> list = new JList<>(listModel);
+        list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        list.setFixedCellHeight(-1); // variable height
 
-        JScrollPane scroll = new JScrollPane(area);
+        // Custom renderer: two-line card per geoset
+        list.setCellRenderer((jList, entry, index, isSelected, cellHasFocus) -> {
+            JPanel cell = new JPanel(new BorderLayout(4, 0));
+            cell.setBorder(new EmptyBorder(6, 8, 6, 8));
+
+            JLabel title = new JLabel("Geoset " + entry.geosetIdx);
+            title.setFont(title.getFont().deriveFont(Font.BOLD, 12f));
+            JLabel tex = new JLabel(entry.texturePath);
+            tex.setFont(tex.getFont().deriveFont(Font.PLAIN, 11f));
+            tex.setForeground(isSelected ? UIManager.getColor("List.selectionForeground") : new Color(100, 100, 100));
+            JLabel detail = new JLabel(entry.detail);
+            detail.setFont(detail.getFont().deriveFont(Font.PLAIN, 10f));
+            detail.setForeground(isSelected ? UIManager.getColor("List.selectionForeground") : new Color(130, 130, 130));
+
+            JPanel textBlock = new JPanel();
+            textBlock.setLayout(new BoxLayout(textBlock, BoxLayout.Y_AXIS));
+            textBlock.setOpaque(false);
+            textBlock.add(title);
+            textBlock.add(tex);
+            textBlock.add(detail);
+
+            cell.add(textBlock, BorderLayout.CENTER);
+
+            if (isSelected) {
+                cell.setBackground(UIManager.getColor("List.selectionBackground"));
+                title.setForeground(UIManager.getColor("List.selectionForeground"));
+            } else {
+                cell.setBackground(index % 2 == 0 ? UIManager.getColor("List.background") : new Color(245, 245, 250));
+            }
+            cell.setOpaque(true);
+            return cell;
+        });
+
+        // Hover listener: highlight geoset on the 3D mesh
+        list.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                int idx = list.locationToIndex(e.getPoint());
+                if (idx >= 0 && list.getCellBounds(idx, idx).contains(e.getPoint())) {
+                    GeosetEntry entry = listModel.get(idx);
+                    if (previewCanvas != null) previewCanvas.setHighlightedGeosetIdx(entry.geosetIdx);
+                } else {
+                    if (previewCanvas != null) previewCanvas.setHighlightedGeosetIdx(-1);
+                }
+            }
+        });
+        list.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseExited(MouseEvent e) {
+                if (previewCanvas != null) previewCanvas.setHighlightedGeosetIdx(-1);
+            }
+        });
+
+        JScrollPane scroll = new JScrollPane(list);
+        scroll.getVerticalScrollBar().setUnitIncrement(12);
         panel.add(scroll, BorderLayout.CENTER);
         return panel;
+    }
+
+    private record GeosetEntry(int geosetIdx, String texturePath, String detail) {
+        @Override public String toString() { return "Geoset " + geosetIdx; }
     }
 
     // ── Nodes tab ─────────────────────────────────────────────────────────
