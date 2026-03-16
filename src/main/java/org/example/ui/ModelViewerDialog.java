@@ -246,12 +246,12 @@ public final class ModelViewerDialog extends JDialog {
 
         // Shading mode
         JPanel shadingRow = flowRow("Shading:");
-        JComboBox<String> shadingCombo = new JComboBox<>(new String[]{"Solid", "Textured", "Lit", "Wireframe"});
+        JComboBox<String> shadingCombo = new JComboBox<>(new String[]{"Solid", "Textured", "Lit", "Normals", "Wireframe"});
         shadingCombo.setSelectedIndex(1);
         shadingCombo.addActionListener(e -> {
             if (previewCanvas == null) return;
             int idx = shadingCombo.getSelectedIndex();
-            if (idx == 3) {
+            if (idx == 4) { // Wireframe
                 previewCanvas.setShadingMode(GlPreviewCanvas.ShadingMode.SOLID);
                 previewCanvas.setWireframe(true);
             } else {
@@ -259,6 +259,7 @@ public final class ModelViewerDialog extends JDialog {
                 GlPreviewCanvas.ShadingMode mode = switch (idx) {
                     case 0  -> GlPreviewCanvas.ShadingMode.SOLID;
                     case 2  -> GlPreviewCanvas.ShadingMode.LIT;
+                    case 3  -> GlPreviewCanvas.ShadingMode.NORMALS;
                     default -> GlPreviewCanvas.ShadingMode.TEXTURED;
                 };
                 previewCanvas.setShadingMode(mode);

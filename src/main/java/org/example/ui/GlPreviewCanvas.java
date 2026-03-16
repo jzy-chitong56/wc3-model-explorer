@@ -27,7 +27,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private static final float MIN_DISTANCE = 30.0f;
     private static final float MAX_DISTANCE = 3000.0f;
 
-    public enum ShadingMode { SOLID, TEXTURED, LIT }
+    public enum ShadingMode { SOLID, TEXTURED, LIT, NORMALS }
 
     private final ModelMesh         mesh;
     private final ModelAnimData     animData;
@@ -72,6 +72,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private int solidShader = 0, solidMvp = -1, solidColor = -1;
     private int texShader   = 0, texMvp   = -1, texSampler = -1, texHasTex = -1, texAlphaThresh = -1, texAlphaU = -1, texUVTransform = -1;
     private int litShader   = 0, litMvp   = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1;
+    private int normalsShader = 0, normalsMvp = -1;
 
     private int gridVao = 0, gridVbo = 0, gridVertexCount = 0;
 
@@ -186,6 +187,26 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "  fragColor = vec4(base.rgb * light, base.a);\n" +
         "}\n";
 
+    // Normals shader: visualises face normals as RGB colour (N*0.5+0.5)
+    static final String NORMALS_VERT =
+        "#version 330 core\n" +
+        "layout(location=0) in vec3 aPos;\n" +
+        "uniform mat4 mvp;\n" +
+        "out vec3 vWorldPos;\n" +
+        "void main(){\n" +
+        "  gl_Position = mvp * vec4(aPos,1.0);\n" +
+        "  vWorldPos = aPos;\n" +
+        "}\n";
+
+    static final String NORMALS_FRAG =
+        "#version 330 core\n" +
+        "in vec3 vWorldPos;\n" +
+        "out vec4 fragColor;\n" +
+        "void main(){\n" +
+        "  vec3 N = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
+        "  fragColor = vec4(N * 0.5 + 0.5, 1.0);\n" +
+        "}\n";
+
     // ── Construction ─────────────────────────────────────────────────────────
 
     public GlPreviewCanvas(ModelAsset asset) {
@@ -276,6 +297,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         compileSolidShader();
         compileTexShader();
         compileLitShader();
+        compileNormalsShader();
         buildGridVao();
         if (hasRenderableMesh()) {
             buildMeshVao();
@@ -339,7 +361,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 // Even without a selected sequence, global texture animations should run
                 sampleTextureAnims();
             }
-            if (shadingMode == ShadingMode.LIT && litShader != 0 && geoVao != null) {
+            if (shadingMode == ShadingMode.NORMALS && normalsShader != 0 && geoVao != null) {
+                drawNormals(modelMvp);
+            } else if (shadingMode == ShadingMode.LIT && litShader != 0 && geoVao != null) {
                 drawLit(modelMvp);
             } else if (shadingMode == ShadingMode.TEXTURED && texShader != 0 && geoVao != null) {
                 drawTextured(modelMvp);
@@ -476,6 +500,20 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     private void drawLit(float[] mvp) {
         drawPerGeoset(mvp, litShader, litMvp, litSampler, litHasTex, litAlphaThresh, litAlphaU, litUVTransform);
+    }
+
+    private void drawNormals(float[] mvp) {
+        glUseProgram(normalsShader);
+        glUniformMatrix4fv(normalsMvp, false, mvp);
+        glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
+        for (int gi = 0; gi < geoVao.length; gi++) {
+            if (geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
+            glBindVertexArray(geoVao[gi]);
+            glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
+        }
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glBindVertexArray(0);
+        glUseProgram(0);
     }
 
     /**
@@ -1039,6 +1077,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private void compileLitShader() {
         litShader = linkProgram(LIT_VERT, LIT_FRAG);
         if (litShader != 0) { litMvp = glGetUniformLocation(litShader,"mvp"); litSampler = glGetUniformLocation(litShader,"uTex"); litHasTex = glGetUniformLocation(litShader,"uHasTex"); litAlphaThresh = glGetUniformLocation(litShader,"uAlphaThreshold"); litAlphaU = glGetUniformLocation(litShader,"uAlpha"); litUVTransform = glGetUniformLocation(litShader,"uUVTransform"); }
+    }
+    private void compileNormalsShader() {
+        normalsShader = linkProgram(NORMALS_VERT, NORMALS_FRAG);
+        if (normalsShader != 0) { normalsMvp = glGetUniformLocation(normalsShader, "mvp"); }
     }
     static int linkProgram(String vs, String fs) {
         int v = compileShader(GL_VERTEX_SHADER,vs), f = compileShader(GL_FRAGMENT_SHADER,fs);
