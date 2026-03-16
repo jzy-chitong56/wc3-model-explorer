@@ -110,8 +110,8 @@ public final class ModelViewerDialog extends JDialog {
         panel.setMinimumSize(new Dimension(400, 300));
         if (previewCanvas != null) {
             // JLayeredPane with manual sizing so GL canvas + overlays stack correctly
-            // Stats HUD overlay
             JLabel statsLabel = buildStatsHud();
+            JComboBox<String> shadingCombo = buildShadingCombo();
 
             // JLayeredPane with doLayout() override to reliably size children
             JLayeredPane layered = new JLayeredPane() {
@@ -120,11 +120,14 @@ public final class ModelViewerDialog extends JDialog {
                     int w = getWidth(), h = getHeight();
                     previewCanvas.setBounds(0, 0, w, h);
                     statsLabel.setBounds(8, 8, 150, 95);
+                    Dimension cs = shadingCombo.getPreferredSize();
+                    shadingCombo.setBounds(w - cs.width - 8, 8, cs.width, cs.height);
                 }
             };
 
             layered.add(previewCanvas, JLayeredPane.DEFAULT_LAYER);
             layered.add(statsLabel, JLayeredPane.PALETTE_LAYER);
+            layered.add(shadingCombo, JLayeredPane.PALETTE_LAYER);
 
             layered.setPreferredSize(new Dimension(VIEW_W, 600));
             panel.add(layered, BorderLayout.CENTER);
@@ -165,6 +168,29 @@ public final class ModelViewerDialog extends JDialog {
         label.setBorder(new EmptyBorder(6, 10, 6, 10));
         label.setBounds(8, 8, 150, 95);
         return label;
+    }
+
+    private JComboBox<String> buildShadingCombo() {
+        JComboBox<String> combo = new JComboBox<>(new String[]{"Solid", "Textured", "Normals", "Wireframe"});
+        combo.setSelectedIndex(1);
+        combo.setOpaque(false);
+        combo.addActionListener(e -> {
+            if (previewCanvas == null) return;
+            int idx = combo.getSelectedIndex();
+            if (idx == 3) { // Wireframe
+                previewCanvas.setShadingMode(GlPreviewCanvas.ShadingMode.SOLID);
+                previewCanvas.setWireframe(true);
+            } else {
+                previewCanvas.setWireframe(false);
+                GlPreviewCanvas.ShadingMode mode = switch (idx) {
+                    case 0  -> GlPreviewCanvas.ShadingMode.SOLID;
+                    case 2  -> GlPreviewCanvas.ShadingMode.NORMALS;
+                    default -> GlPreviewCanvas.ShadingMode.TEXTURED;
+                };
+                previewCanvas.setShadingMode(mode);
+            }
+        });
+        return combo;
     }
 
     // ── Right panel: tabbed pane ─────────────────────────────────────────
@@ -254,31 +280,6 @@ public final class ModelViewerDialog extends JDialog {
         // Separator
         panel.add(new JSeparator(SwingConstants.HORIZONTAL));
         panel.add(Box.createVerticalStrut(8));
-
-        // Shading mode
-        JPanel shadingRow = flowRow("Shading:");
-        JComboBox<String> shadingCombo = new JComboBox<>(new String[]{"Solid", "Textured", "Lit", "Normals", "Wireframe"});
-        shadingCombo.setSelectedIndex(1);
-        shadingCombo.addActionListener(e -> {
-            if (previewCanvas == null) return;
-            int idx = shadingCombo.getSelectedIndex();
-            if (idx == 4) { // Wireframe
-                previewCanvas.setShadingMode(GlPreviewCanvas.ShadingMode.SOLID);
-                previewCanvas.setWireframe(true);
-            } else {
-                previewCanvas.setWireframe(false);
-                GlPreviewCanvas.ShadingMode mode = switch (idx) {
-                    case 0  -> GlPreviewCanvas.ShadingMode.SOLID;
-                    case 2  -> GlPreviewCanvas.ShadingMode.LIT;
-                    case 3  -> GlPreviewCanvas.ShadingMode.NORMALS;
-                    default -> GlPreviewCanvas.ShadingMode.TEXTURED;
-                };
-                previewCanvas.setShadingMode(mode);
-            }
-        });
-        shadingRow.add(shadingCombo);
-        panel.add(shadingRow);
-        panel.add(Box.createVerticalStrut(6));
 
         // Extent overlay
         JCheckBox extentCheckbox = new JCheckBox("Show Extent");
