@@ -72,8 +72,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     // GL resources (all initialised in initGL on the render thread)
     private int solidShader = 0, solidMvp = -1, solidColor = -1, solidAlpha = -1;
-    private int texShader   = 0, texMvp   = -1, texSampler = -1, texHasTex = -1, texAlphaThresh = -1, texAlphaU = -1, texUVTransform = -1;
-    private int litShader   = 0, litMvp   = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1;
+    private int texShader   = 0, texMvp   = -1, texSampler = -1, texHasTex = -1, texAlphaThresh = -1, texAlphaU = -1, texUVTransform = -1, texGeosetColor = -1;
+    private int litShader   = 0, litMvp   = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1, litGeosetColor = -1;
     private int normalsShader = 0, normalsMvp = -1;
 
     private int gridVao = 0, gridVbo = 0, gridVertexCount = 0;
@@ -103,6 +103,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile boolean tcDirty      = false;
     private float[]          animatedVertices;
     private float[]          geosetAlphaValues; // per-geoset alpha (sampled from KGAO)
+    private float[][]        geosetColorValues; // per-geoset RGB color (sampled from KGAC), null entries = white
     private float[][]        geosetUVTransforms; // per-geoset 4x4 UV transform matrices (null = identity)
     private volatile Map<Integer, float[]> lastWorldMap; // cached for node names overlay
     // Node names GL overlay (rendered as textured fullscreen quad)
@@ -147,9 +148,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "uniform bool uHasTex;\n" +
         "uniform float uAlphaThreshold;\n" +
         "uniform float uAlpha;\n" +
+        "uniform vec3 uGeosetColor;\n" +
         "out vec4 fragColor;\n" +
         "void main(){\n" +
         "  vec4 c = uHasTex ? texture(uTex, vUV) : vec4(0.74,0.78,0.86,1.0);\n" +
+        "  c.rgb *= uGeosetColor;\n" +
         "  c.a *= uAlpha;\n" +
         "  if(c.a < uAlphaThreshold) discard;\n" +
         "  fragColor = c;\n" +
@@ -179,6 +182,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "uniform bool uHasTex;\n" +
         "uniform float uAlphaThreshold;\n" +
         "uniform float uAlpha;\n" +
+        "uniform vec3 uGeosetColor;\n" +
         "out vec4 fragColor;\n" +
         "void main(){\n" +
         "  vec3 N = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
@@ -187,6 +191,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "  float ambient = 0.35;\n" +
         "  float light = ambient + (1.0 - ambient) * diff;\n" +
         "  vec4 base = uHasTex ? texture(uTex, vUV) : vec4(0.74,0.78,0.86,1.0);\n" +
+        "  base.rgb *= uGeosetColor;\n" +
         "  base.a *= uAlpha;\n" +
         "  if(base.a < uAlphaThreshold) discard;\n" +
         "  fragColor = vec4(base.rgb * light, base.a);\n" +
@@ -311,6 +316,12 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             // Initialize per-geoset alpha values (1.0 = fully opaque)
             geosetAlphaValues = new float[texData.length];
             java.util.Arrays.fill(geosetAlphaValues, 1.0f);
+            geosetColorValues = new float[texData.length][];
+            // Initialize with static colors from geoset animations
+            for (Map.Entry<Integer, float[]> e : animData.geosetStaticColor().entrySet()) {
+                int gi = e.getKey();
+                if (gi < geosetColorValues.length) geosetColorValues[gi] = e.getValue().clone();
+            }
             geosetUVTransforms = new float[texData.length][];
             buildExtentVao();
             buildCollisionVao();
@@ -368,6 +379,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                     uploadAnimatedVertices();
                 }
                 sampleGeosetAlpha();
+                sampleGeosetColor();
                 sampleTextureAnims();
             } else {
                 // Even without a selected sequence, global texture animations should run
@@ -514,11 +526,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     }
 
     private void drawTextured(float[] mvp) {
-        drawPerGeoset(mvp, texShader, texMvp, texSampler, texHasTex, texAlphaThresh, texAlphaU, texUVTransform);
+        drawPerGeoset(mvp, texShader, texMvp, texSampler, texHasTex, texAlphaThresh, texAlphaU, texUVTransform, texGeosetColor);
     }
 
     private void drawLit(float[] mvp) {
-        drawPerGeoset(mvp, litShader, litMvp, litSampler, litHasTex, litAlphaThresh, litAlphaU, litUVTransform);
+        drawPerGeoset(mvp, litShader, litMvp, litSampler, litHasTex, litAlphaThresh, litAlphaU, litUVTransform, litGeosetColor);
     }
 
     private void drawNormals(float[] mvp) {
@@ -706,7 +718,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     };
 
     private void drawPerGeoset(float[] mvp, int shader, int mvpLoc, int samplerLoc,
-                                int hasTexLoc, int alphaThreshLoc, int alphaLoc, int uvTransformLoc) {
+                                int hasTexLoc, int alphaThreshLoc, int alphaLoc, int uvTransformLoc, int geosetColorLoc) {
         glUseProgram(shader);
         glUniformMatrix4fv(mvpLoc, false, mvp);
         glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
@@ -718,6 +730,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             float alpha = geosetAlpha(gi);
             if (alpha <= 0f) continue; // fully invisible
             setUVTransformUniform(uvTransformLoc, gi);
+            setGeosetColorUniform(geosetColorLoc, gi);
             drawGeoset(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, alpha);
         }
 
@@ -736,6 +749,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 applyBlendMode(texData[gi].filterMode());
             }
             setUVTransformUniform(uvTransformLoc, gi);
+            setGeosetColorUniform(geosetColorLoc, gi);
             drawGeoset(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, alpha);
         }
         glDepthMask(true);
@@ -753,6 +767,17 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         float[] m = (geosetUVTransforms != null && gi < geosetUVTransforms.length)
                 ? geosetUVTransforms[gi] : null;
         glUniformMatrix4fv(loc, false, m != null ? m : IDENTITY_4X4);
+    }
+
+    private void setGeosetColorUniform(int loc, int gi) {
+        if (loc < 0) return;
+        float[] c = (geosetColorValues != null && gi < geosetColorValues.length)
+                ? geosetColorValues[gi] : null;
+        if (c != null) {
+            glUniform3f(loc, c[0], c[1], c[2]);
+        } else {
+            glUniform3f(loc, 1f, 1f, 1f); // white = no tint
+        }
     }
 
     private float geosetAlpha(int gi) {
@@ -891,6 +916,25 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             } else {
                 geosetAlphaValues[gi] = 1.0f;
             }
+        }
+    }
+
+    private void sampleGeosetColor() {
+        if (geosetColorValues == null) return;
+        SequenceInfo seq = animData.sequences().get(currentSeqIdx);
+        long[] globalSeqs = animData.globalSequences();
+        for (int gi = 0; gi < geosetColorValues.length; gi++) {
+            AnimTrack track = animData.geosetColor().get(gi);
+            if (track != null && !track.isEmpty()) {
+                if (track.isGlobal() || hasKeysInRange(track, seq.start(), seq.end())) {
+                    float[] rgb = BoneAnimator.interpTrackVec3(track, animTimeMs, seq.start(), seq.end(), globalSeqs, 1f, 1f, 1f);
+                    geosetColorValues[gi] = rgb;
+                } else {
+                    // Fall back to static color or white
+                    geosetColorValues[gi] = animData.geosetStaticColor().get(gi);
+                }
+            }
+            // If no animated track, keep whatever was initialized (static color or null=white)
         }
     }
 
@@ -1254,11 +1298,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     }
     private void compileTexShader() {
         texShader = linkProgram(TEX_VERT, TEX_FRAG);
-        if (texShader != 0) { texMvp = glGetUniformLocation(texShader,"mvp"); texSampler = glGetUniformLocation(texShader,"uTex"); texHasTex = glGetUniformLocation(texShader,"uHasTex"); texAlphaThresh = glGetUniformLocation(texShader,"uAlphaThreshold"); texAlphaU = glGetUniformLocation(texShader,"uAlpha"); texUVTransform = glGetUniformLocation(texShader,"uUVTransform"); }
+        if (texShader != 0) { texMvp = glGetUniformLocation(texShader,"mvp"); texSampler = glGetUniformLocation(texShader,"uTex"); texHasTex = glGetUniformLocation(texShader,"uHasTex"); texAlphaThresh = glGetUniformLocation(texShader,"uAlphaThreshold"); texAlphaU = glGetUniformLocation(texShader,"uAlpha"); texUVTransform = glGetUniformLocation(texShader,"uUVTransform"); texGeosetColor = glGetUniformLocation(texShader,"uGeosetColor"); }
     }
     private void compileLitShader() {
         litShader = linkProgram(LIT_VERT, LIT_FRAG);
-        if (litShader != 0) { litMvp = glGetUniformLocation(litShader,"mvp"); litSampler = glGetUniformLocation(litShader,"uTex"); litHasTex = glGetUniformLocation(litShader,"uHasTex"); litAlphaThresh = glGetUniformLocation(litShader,"uAlphaThreshold"); litAlphaU = glGetUniformLocation(litShader,"uAlpha"); litUVTransform = glGetUniformLocation(litShader,"uUVTransform"); }
+        if (litShader != 0) { litMvp = glGetUniformLocation(litShader,"mvp"); litSampler = glGetUniformLocation(litShader,"uTex"); litHasTex = glGetUniformLocation(litShader,"uHasTex"); litAlphaThresh = glGetUniformLocation(litShader,"uAlphaThreshold"); litAlphaU = glGetUniformLocation(litShader,"uAlpha"); litUVTransform = glGetUniformLocation(litShader,"uUVTransform"); litGeosetColor = glGetUniformLocation(litShader,"uGeosetColor"); }
     }
     private void compileNormalsShader() {
         normalsShader = linkProgram(NORMALS_VERT, NORMALS_FRAG);

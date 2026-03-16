@@ -16,15 +16,17 @@ public record ModelAnimData(
         List<GeosetSkinData>  geosets,           // one entry per geoset, same order as ModelMesh
         Map<Integer, AnimTrack> geosetAlpha,     // geoset index → KGAO track
         Map<Integer, Float>     geosetStaticAlpha, // geoset index → static alpha fallback
+        Map<Integer, AnimTrack> geosetColor,     // geoset index → KGAC color track (vec3 RGB)
+        Map<Integer, float[]>   geosetStaticColor, // geoset index → static color fallback [R,G,B]
         Map<Integer, TextureAnimTracks> textureAnims, // geoset index → texture anim tracks
         long[] globalSequences                   // global sequence durations (ms)
 ) {
     public static final ModelAnimData EMPTY =
-            new ModelAnimData(List.of(), new BoneNode[0], List.of(), Map.of(), Map.of(), Map.of(), new long[0]);
+            new ModelAnimData(List.of(), new BoneNode[0], List.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), new long[0]);
 
-    /** Convenience constructor without geoset alpha (backward compat). */
+    /** Convenience constructor without geoset alpha/color (backward compat). */
     public ModelAnimData(List<SequenceInfo> sequences, BoneNode[] bones, List<GeosetSkinData> geosets) {
-        this(sequences, bones, geosets, Map.of(), Map.of(), Map.of(), new long[0]);
+        this(sequences, bones, geosets, Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), new long[0]);
     }
 
     public boolean hasAnimation() {

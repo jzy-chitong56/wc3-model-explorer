@@ -73,7 +73,7 @@ public final class ThumbnailRenderer {
 
     // GL resources (initialized once in paintGL on first call)
     private int fbo, fboColorTex, fboDepthRbo;
-    private int texShader, texMvpLoc, texSamplerLoc, texHasTexLoc, texAlphaThreshLoc, texAlphaLoc, texUVTransformLoc;
+    private int texShader, texMvpLoc, texSamplerLoc, texHasTexLoc, texAlphaThreshLoc, texAlphaLoc, texUVTransformLoc, texGeosetColorLoc;
     private boolean glInitialized;
 
     // Background color
@@ -226,6 +226,7 @@ public final class ThumbnailRenderer {
             texAlphaThreshLoc = glGetUniformLocation(texShader, "uAlphaThreshold");
             texAlphaLoc = glGetUniformLocation(texShader, "uAlpha");
             texUVTransformLoc = glGetUniformLocation(texShader, "uUVTransform");
+            texGeosetColorLoc = glGetUniformLocation(texShader, "uGeosetColor");
         }
 
         fbo = glGenFramebuffers();
@@ -455,6 +456,7 @@ public final class ThumbnailRenderer {
 
         glUseProgram(texShader);
         glUniformMatrix4fv(texMvpLoc, false, mvp);
+        if (texGeosetColorLoc >= 0) glUniform3f(texGeosetColorLoc, 1f, 1f, 1f);
 
         // Pass 1: opaque
         for (int i = 0; i < geoCount; i++) {

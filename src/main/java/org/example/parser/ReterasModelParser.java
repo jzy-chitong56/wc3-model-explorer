@@ -336,6 +336,8 @@ public final class ReterasModelParser {
         // to the KGAO track.
         Map<Integer, AnimTrack> geosetAlpha = new HashMap<>();
         Map<Integer, Float> geosetStaticAlpha = new HashMap<>();
+        Map<Integer, AnimTrack> geosetColor = new HashMap<>();
+        Map<Integer, float[]> geosetStaticColor = new HashMap<>();
         // Build mapping: original geoset list index → mesh-included index
         Map<Integer, Integer> origToMeshIdx = new HashMap<>();
         int meshIdx = 0;
@@ -349,17 +351,23 @@ public final class ReterasModelParser {
             if (ga == null || ga.geosetId < 0) continue;
             Integer mi = origToMeshIdx.get(ga.geosetId);
             if (mi == null) continue;
-            // Extract KGAO track
             for (MdlxTimeline<?> tl : ga.timelines) {
                 if (tl == null || tl.name == null) continue;
-                if ("KGAO".equals(tl.name.asStringValue())) {
+                String tag = tl.name.asStringValue();
+                if ("KGAO".equals(tag)) {
                     AnimTrack track = extractTrack(tl);
                     if (!track.isEmpty()) geosetAlpha.put(mi, track);
-                    break;
+                } else if ("KGAC".equals(tag)) {
+                    AnimTrack track = extractTrack(tl);
+                    if (!track.isEmpty()) geosetColor.put(mi, track);
                 }
             }
             // Always store static alpha as fallback
             geosetStaticAlpha.put(mi, ga.alpha);
+            // Store static color if present (flags bit 0x2 = color present)
+            if (ga.color != null && ga.color.length >= 3) {
+                geosetStaticColor.put(mi, new float[]{ga.color[0], ga.color[1], ga.color[2]});
+            }
         }
 
         // Texture animations (KTAT/KTAR/KTAS) — indexed by textureAnimationId
@@ -398,7 +406,9 @@ public final class ReterasModelParser {
         }
 
         return new ModelAnimData(List.copyOf(sequences), bones, List.copyOf(geosets),
-                Map.copyOf(geosetAlpha), Map.copyOf(geosetStaticAlpha), Map.copyOf(textureAnims), globalSeqs);
+                Map.copyOf(geosetAlpha), Map.copyOf(geosetStaticAlpha),
+                Map.copyOf(geosetColor), Map.copyOf(geosetStaticColor),
+                Map.copyOf(textureAnims), globalSeqs);
     }
 
     /** Extract texture animation tracks from model.textureAnimations. */
