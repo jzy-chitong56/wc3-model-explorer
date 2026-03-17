@@ -42,9 +42,12 @@ import java.awt.image.BufferedImage;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.text.NumberFormat;
+
 import java.util.ArrayList;
+
 import java.util.List;
 import java.util.Locale;
+
 import java.util.stream.Collectors;
 
 public final class MainWindow extends JFrame {
@@ -372,8 +375,12 @@ public final class MainWindow extends JFrame {
             String expanded = cmd.contains("{file}")
                     ? cmd.replace("{file}", modelPath)
                     : cmd + " \"" + modelPath + "\"";
-            // Parse command respecting quoted segments
             List<String> args = parseCommand(expanded);
+            // Auto-detect .jar files and prepend "java -jar"
+            if (!args.isEmpty() && args.get(0).toLowerCase(Locale.ROOT).endsWith(".jar")) {
+                args.add(0, "-jar");
+                args.add(0, "java");
+            }
             new ProcessBuilder(args).start();
         } catch (Exception ex) {
             javax.swing.JOptionPane.showMessageDialog(this,
