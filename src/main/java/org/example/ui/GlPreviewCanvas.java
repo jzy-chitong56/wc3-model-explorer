@@ -1182,7 +1182,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public void setLooping(boolean l)          { animLooping = l; }
     private volatile Runnable onAnimationFinished;
     public void setOnAnimationFinished(Runnable r) { onAnimationFinished = r; }
-    public void setTeamColor(int idx)          { int v = Math.max(0, Math.min(11, idx)); if (v != teamColorIdx) { teamColorIdx = v; tcDirty = true; } }
+    public void setTeamColor(int idx)          { int v = TeamColorOptions.clampIndex(idx); if (v != teamColorIdx) { teamColorIdx = v; tcDirty = true; } }
     public int  getTeamColor()                 { return teamColorIdx; }
     public void setShadingMode(ShadingMode m) { shadingMode = m != null ? m : ShadingMode.SOLID; }
     public void setWireframe(boolean w)       { wireframe = w; }
@@ -1548,8 +1548,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         }
     }
 
-    // WC3 team color RGB values (indices 0–11)
-    private static final int[][] TEAM_COLORS = {
+    // Fallback only when team color textures cannot be resolved.
+    private static final int[][] DEFAULT_TEAM_COLORS = {
         {255,   3,   3}, // 0 Red
         {  0,  66, 255}, // 1 Blue
         {  0, 206, 209}, // 2 Teal
@@ -1569,7 +1569,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         if (replId == 1 && !texPath.isEmpty()) {
             return loadTeamColorTexture(texPath, tc);
         } else if (replId == 1) {
-            return createSolidColorTexture(TEAM_COLORS[tc]);
+            return loadTeamColorSwatchTexture(tc);
         } else if (replId == 2) {
             String glowPath = replaceableTexturePath(2, tc);
             int tex = loadGlTexture(glowPath);
@@ -1596,9 +1596,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         BufferedImage base = GameDataSource.getInstance().loadTexture(basePath, modelDir, rootDir);
         if (base == null) {
             System.out.println("[GL] TC base texture not found: " + basePath + ", using solid TC");
-            return createSolidColorTexture(TEAM_COLORS[tcIdx]);
+            return loadTeamColorSwatchTexture(tcIdx);
         }
-        int[] tc = TEAM_COLORS[tcIdx];
+        int[] tc = resolveTeamColorRgb(tcIdx);
         int w = base.getWidth(), h = base.getHeight();
         BufferedImage result = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         for (int y = 0; y < h; y++) {
@@ -1618,6 +1618,22 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         }
         System.out.println("[GL] Composited TC " + tcIdx + " with " + basePath + " (" + w + "x" + h + ")");
         return uploadTexture(result);
+    }
+
+    private int loadTeamColorSwatchTexture(int tcIdx) {
+        BufferedImage img = GameDataSource.getInstance().loadTeamColorTexture(tcIdx, modelDir, rootDir);
+        if (img != null) {
+            return uploadTexture(img);
+        }
+        return createSolidColorTexture(resolveTeamColorRgb(tcIdx));
+    }
+
+    private int[] resolveTeamColorRgb(int tcIdx) {
+        int[] sampled = GameDataSource.getInstance().loadTeamColorRgb(tcIdx, modelDir, rootDir);
+        if (sampled != null) {
+            return sampled;
+        }
+        return DEFAULT_TEAM_COLORS[Math.max(0, Math.min(DEFAULT_TEAM_COLORS.length - 1, tcIdx))];
     }
 
     /** Creates a 4x4 solid color GL texture. */

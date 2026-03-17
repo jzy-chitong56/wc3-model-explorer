@@ -27,6 +27,7 @@ public final class AppSettings {
     private static final String KEY_CAMERA_PITCH        = "cameraPitch";
     private static final String KEY_THUMBNAIL_ANIM      = "thumbnailAnimName";
     private static final String KEY_THUMBNAIL_QUALITY   = "thumbnailQuality";
+    private static final String KEY_THUMBNAIL_TEAM_COLOR = "thumbnailTeamColor";
     private static final String SETTINGS_FILE_NAME      = "settings.properties";
 
     public static final float DEFAULT_CAMERA_YAW   = 200f;
@@ -44,6 +45,7 @@ public final class AppSettings {
     private float          cameraPitch    = DEFAULT_CAMERA_PITCH;
     private String         thumbnailAnimName = "Stand";
     private ThumbnailQuality thumbnailQuality = ThumbnailQuality.MEDIUM;
+    private int            thumbnailTeamColor = 0;
     private List<ExternalProgram> externalPrograms = new ArrayList<>();
 
     private AppSettings(Path settingsPath) {
@@ -152,6 +154,14 @@ public final class AppSettings {
         this.thumbnailQuality = quality == null ? ThumbnailQuality.MEDIUM : quality;
     }
 
+    public int thumbnailTeamColor() {
+        return thumbnailTeamColor;
+    }
+
+    public void setThumbnailTeamColor(int thumbnailTeamColor) {
+        this.thumbnailTeamColor = Math.max(0, Math.min(org.example.model.TeamColorOptions.COUNT - 1, thumbnailTeamColor));
+    }
+
     public List<ExternalProgram> externalPrograms() {
         return new ArrayList<>(externalPrograms);
     }
@@ -173,6 +183,7 @@ public final class AppSettings {
         properties.setProperty(KEY_CAMERA_PITCH, String.valueOf(cameraPitch));
         properties.setProperty(KEY_THUMBNAIL_ANIM, thumbnailAnimName);
         properties.setProperty(KEY_THUMBNAIL_QUALITY, thumbnailQuality.name());
+        properties.setProperty(KEY_THUMBNAIL_TEAM_COLOR, String.valueOf(thumbnailTeamColor));
         for (int i = 0; i < externalPrograms.size(); i++) {
             ExternalProgram p = externalPrograms.get(i);
             properties.setProperty("external.program." + i + ".name", p.name());
@@ -216,6 +227,8 @@ public final class AppSettings {
             thumbnailAnimName = properties.getProperty(KEY_THUMBNAIL_ANIM, "Stand");
             String qualityVal = properties.getProperty(KEY_THUMBNAIL_QUALITY, ThumbnailQuality.MEDIUM.name());
             thumbnailQuality = parseThumbnailQuality(qualityVal);
+            thumbnailTeamColor = Math.max(0, Math.min(org.example.model.TeamColorOptions.COUNT - 1,
+                    parseInt(properties.getProperty(KEY_THUMBNAIL_TEAM_COLOR), 0)));
             int progCount = parseInt(properties.getProperty("external.program.count"), 0);
             externalPrograms = new ArrayList<>();
             for (int i = 0; i < progCount; i++) {

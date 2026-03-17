@@ -16,9 +16,11 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.ListSelectionModel;
+import javax.swing.TransferHandler;
 import javax.swing.SwingWorker;
 import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
@@ -34,16 +36,22 @@ import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
 import java.awt.Image;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.text.NumberFormat;
 
 import java.util.ArrayList;
+import java.util.Collections;
 
 import java.util.List;
 import java.util.Locale;
@@ -58,6 +66,7 @@ public final class MainWindow extends JFrame {
     private final JTextField searchField = new JTextField();
     private final JComboBox<PortraitFilter> portraitFilterCombo = new JComboBox<>(PortraitFilter.values());
     private final JComboBox<ThumbnailSize> thumbnailSizeCombo = new JComboBox<>(ThumbnailSize.values());
+    private final JComboBox<String> thumbnailTeamColorCombo = new JComboBox<>(TeamColorOptions.labels());
     private final JButton browseButton = new JButton("Browse");
     private final JButton scanButton = new JButton("Scan");
     private final JButton refreshIndexButton = new JButton("Rescan");
@@ -119,6 +128,8 @@ public final class MainWindow extends JFrame {
         filterRow.add(searchField, BorderLayout.CENTER);
         JPanel filterControls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         filterControls.add(thumbnailSizeCombo);
+        filterControls.add(new JLabel("Team:"));
+        filterControls.add(thumbnailTeamColorCombo);
         filterControls.add(portraitFilterCombo);
         filterControls.add(advancedFiltersToggle);
         filterRow.add(filterControls, BorderLayout.EAST);
@@ -129,6 +140,8 @@ public final class MainWindow extends JFrame {
         assetList.setCellRenderer(new AssetCellRenderer());
         assetList.setLayoutOrientation(JList.HORIZONTAL_WRAP);
         assetList.setVisibleRowCount(-1);
+        assetList.setDragEnabled(true);
+        assetList.setTransferHandler(new AssetFileTransferHandler());
         JScrollPane listScrollPane = new JScrollPane(assetList);
 
         JPanel topContainer = new JPanel(new BorderLayout(0, 8));
@@ -161,6 +174,15 @@ public final class MainWindow extends JFrame {
             settings.setThumbnailSize((ThumbnailSize) thumbnailSizeCombo.getSelectedItem());
             settings.save();
             updateCardSizing();
+            applyFilter();
+        });
+        thumbnailTeamColorCombo.addActionListener(event -> {
+            int teamColor = thumbnailTeamColorCombo.getSelectedIndex();
+            settings.setThumbnailTeamColor(teamColor);
+            settings.save();
+            if (thumbnailRenderer != null) {
+                thumbnailRenderer.setTeamColor(teamColor);
+            }
             applyFilter();
         });
         wireFieldForFiltering(animationFilterField);
@@ -320,6 +342,12 @@ public final class MainWindow extends JFrame {
         rootField.setText(settings.lastRootDirectory());
         portraitFilterCombo.setSelectedItem(settings.portraitFilter());
         thumbnailSizeCombo.setSelectedItem(settings.thumbnailSize());
+        thumbnailTeamColorCombo.setRenderer(new TeamColorComboRenderer(thumbnailTeamColorCombo, idx -> {
+            int[] rgb = GameDataSource.getInstance().loadTeamColorRgb(idx, null, currentScanRoot());
+            return rgb != null ? rgb : TeamColorOptions.fallbackRgb(idx);
+        }));
+        thumbnailTeamColorCombo.setSelectedIndex(settings.thumbnailTeamColor());
+        thumbnailTeamColorCombo.setToolTipText("Thumbnail team color");
         updateCardSizing();
         // Initialise data sources in background so startup is not blocked
         new Thread(() -> GameDataSource.getInstance().refresh(settings), "DataSource-Init").start();
@@ -332,6 +360,19 @@ public final class MainWindow extends JFrame {
     private void saveCurrentRootDirectory() {
         settings.setLastRootDirectory(rootField.getText().trim());
         settings.save();
+        thumbnailTeamColorCombo.repaint();
+    }
+
+    private Path currentScanRoot() {
+        String rootText = rootField.getText().trim();
+        if (rootText.isEmpty()) {
+            return null;
+        }
+        try {
+            return Path.of(rootText);
+        } catch (InvalidPathException ignored) {
+            return null;
+        }
     }
 
     private void showAssetContextMenu(ModelAsset asset, java.awt.Component comp, int x, int y) {
@@ -345,6 +386,10 @@ public final class MainWindow extends JFrame {
                     .setContents(new java.awt.datatransfer.StringSelection(path), null);
         });
         popup.add(copyPathItem);
+
+        javax.swing.JMenuItem copyFileItem = new javax.swing.JMenuItem("Copy File");
+        copyFileItem.addActionListener(e -> copyAssetFileToClipboard(asset));
+        popup.add(copyFileItem);
 
         // External programs
         List<ExternalProgram> programs = settings.externalPrograms();
@@ -389,6 +434,12 @@ public final class MainWindow extends JFrame {
         }
     }
 
+    private void copyAssetFileToClipboard(ModelAsset asset) {
+        File file = asset.path().toFile();
+        java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                .setContents(new FileListTransferable(Collections.singletonList(file)), null);
+    }
+
     /** Splits a command string into tokens, respecting double-quoted segments. */
     private static List<String> parseCommand(String command) {
         List<String> tokens = new ArrayList<>();
@@ -409,6 +460,48 @@ public final class MainWindow extends JFrame {
         }
         if (!current.isEmpty()) tokens.add(current.toString());
         return tokens;
+    }
+
+    private final class AssetFileTransferHandler extends TransferHandler {
+        @Override
+        protected Transferable createTransferable(JComponent c) {
+            ModelAsset asset = assetList.getSelectedValue();
+            if (asset == null) {
+                return null;
+            }
+            return new FileListTransferable(Collections.singletonList(asset.path().toFile()));
+        }
+
+        @Override
+        public int getSourceActions(JComponent c) {
+            return COPY;
+        }
+    }
+
+    private static final class FileListTransferable implements Transferable {
+        private final List<File> files;
+
+        private FileListTransferable(List<File> files) {
+            this.files = files;
+        }
+
+        @Override
+        public DataFlavor[] getTransferDataFlavors() {
+            return new DataFlavor[]{DataFlavor.javaFileListFlavor};
+        }
+
+        @Override
+        public boolean isDataFlavorSupported(DataFlavor flavor) {
+            return DataFlavor.javaFileListFlavor.equals(flavor);
+        }
+
+        @Override
+        public Object getTransferData(DataFlavor flavor) throws UnsupportedFlavorException, IOException {
+            if (!isDataFlavorSupported(flavor)) {
+                throw new UnsupportedFlavorException(flavor);
+            }
+            return files;
+        }
     }
 
     private void showModelDetails(ModelAsset asset) {
@@ -499,6 +592,7 @@ public final class MainWindow extends JFrame {
         }
         thumbnailRenderer.setCameraAngles(settings.cameraYaw(), settings.cameraPitch());
         thumbnailRenderer.setAnimationName(settings.thumbnailAnimName());
+        thumbnailRenderer.setTeamColor(settings.thumbnailTeamColor());
         ThumbnailQuality quality = settings.thumbnailQuality();
         thumbnailRenderer.setQuality(quality.renderSize(), quality.thumbSize());
     }

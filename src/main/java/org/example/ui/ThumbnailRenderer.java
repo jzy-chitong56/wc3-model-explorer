@@ -45,9 +45,7 @@ public final class ThumbnailRenderer {
     private int renderSize = 512; // supersample then downsample
     private boolean fboNeedsResize;
 
-    // Team color 0 (red) used for thumbnails
-    private static final int TEAM_COLOR_IDX = 0;
-    private static final int[][] TEAM_COLORS = {
+    private static final int[][] DEFAULT_TEAM_COLORS = {
         {255,   3,   3}, {  0,  66, 255}, {  0, 206, 209}, { 84,   0, 129},
         {255, 252,   0}, {254, 138,  14}, { 32, 192,   0}, {229,  91, 176},
         {149, 150, 151}, {126, 191, 241}, {  0,  97,  31}, { 78,  42,   4},
@@ -58,6 +56,7 @@ public final class ThumbnailRenderer {
     private float cameraYaw = 200f;
     private float cameraPitch = 20f;
     private String animationName = "Stand";
+    private volatile int teamColorIdx = 0;
 
     private final JFrame hiddenFrame;
     private final AWTGLCanvas canvas;
@@ -152,6 +151,15 @@ public final class ThumbnailRenderer {
         this.animationName = name == null ? "" : name.trim();
     }
 
+    public void setTeamColor(int idx) {
+        int clamped = TeamColorOptions.clampIndex(idx);
+        if (clamped != teamColorIdx) {
+            teamColorIdx = clamped;
+            cancelPending();
+            clearCache();
+        }
+    }
+
     public void setQuality(int newRenderSize, int newThumbSize) {
         if (newRenderSize != this.renderSize || newThumbSize != this.thumbSize) {
             this.renderSize = newRenderSize;
@@ -201,11 +209,9 @@ public final class ThumbnailRenderer {
                 currentRequest = null;
                 currentResult = null;
 
-                if (thumb != null) {
+                if (thumb != null && req.generation() == generation.get()) {
                     cache.put(req.asset().path(), thumb);
-                    if (req.generation() == generation.get()) {
-                        SwingUtilities.invokeLater(() -> req.callback().accept(thumb));
-                    }
+                    SwingUtilities.invokeLater(() -> req.callback().accept(thumb));
                 }
             } catch (Exception ex) {
                 System.err.println("[Thumbnail] Error rendering " + req.asset().fileName() + ": " + ex);
@@ -278,6 +284,7 @@ public final class ThumbnailRenderer {
 
         Path modelDir = req.asset().path().getParent();
         Path rootDir = req.rootDir();
+        int currentTeamColor = teamColorIdx;
 
         // Build per-geoset VAOs and load textures
         int geoCount = texData.length;
@@ -427,11 +434,11 @@ public final class ThumbnailRenderer {
                     geoTex[gi] = new int[layers.size()];
                     for (int li = 0; li < layers.size(); li++) {
                         var layer = layers.get(li);
-                        geoTex[gi][li] = loadLayerTexture(layer.texturePath(), layer.replaceableId(), TEAM_COLOR_IDX, modelDir, rootDir);
+                        geoTex[gi][li] = loadLayerTexture(layer.texturePath(), layer.replaceableId(), currentTeamColor, modelDir, rootDir);
                     }
                 } else {
                     geoTex[gi] = new int[1];
-                    geoTex[gi][0] = loadLayerTexture(texData[gi].texturePath(), texData[gi].replaceableId(), TEAM_COLOR_IDX, modelDir, rootDir);
+                    geoTex[gi][0] = loadLayerTexture(texData[gi].texturePath(), texData[gi].replaceableId(), currentTeamColor, modelDir, rootDir);
                 }
 
                 indexOffset += faceCount;
@@ -637,12 +644,12 @@ public final class ThumbnailRenderer {
         if (replId == 1 && !texPath.isEmpty()) {
             return loadTeamColorTexture(texPath, tc, modelDir, rootDir);
         } else if (replId == 1) {
-            return createSolidColorTexture(TEAM_COLORS[tc]);
+            return loadTeamColorSwatchTexture(tc, modelDir, rootDir);
         } else if (replId == 2) {
             String glowPath = String.format("ReplaceableTextures\\TeamGlow\\TeamGlow%02d.blp", tc);
             int tex = loadGlTexture(glowPath, modelDir, rootDir);
             if (tex == 0 && !texPath.isEmpty()) tex = loadGlTexture(texPath, modelDir, rootDir);
-            if (tex == 0) tex = createSolidColorTexture(TEAM_COLORS[tc]);
+            if (tex == 0) tex = createSolidColorTexture(resolveTeamColorRgb(tc, modelDir, rootDir));
             return tex;
         } else if (!texPath.isEmpty()) {
             return loadGlTexture(texPath, modelDir, rootDir);
@@ -658,8 +665,8 @@ public final class ThumbnailRenderer {
 
     private static int loadTeamColorTexture(String basePath, int tcIdx, Path modelDir, Path rootDir) {
         BufferedImage base = GameDataSource.getInstance().loadTexture(basePath, modelDir, rootDir);
-        if (base == null) return createSolidColorTexture(TEAM_COLORS[tcIdx]);
-        int[] tc = TEAM_COLORS[tcIdx];
+        if (base == null) return loadTeamColorSwatchTexture(tcIdx, modelDir, rootDir);
+        int[] tc = resolveTeamColorRgb(tcIdx, modelDir, rootDir);
         int w = base.getWidth(), h = base.getHeight();
         BufferedImage result = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         for (int y = 0; y < h; y++) {
@@ -674,6 +681,22 @@ public final class ThumbnailRenderer {
             }
         }
         return GlPreviewCanvas.uploadTexture(result);
+    }
+
+    private static int loadTeamColorSwatchTexture(int tcIdx, Path modelDir, Path rootDir) {
+        BufferedImage img = GameDataSource.getInstance().loadTeamColorTexture(tcIdx, modelDir, rootDir);
+        if (img != null) {
+            return GlPreviewCanvas.uploadTexture(img);
+        }
+        return createSolidColorTexture(resolveTeamColorRgb(tcIdx, modelDir, rootDir));
+    }
+
+    private static int[] resolveTeamColorRgb(int tcIdx, Path modelDir, Path rootDir) {
+        int[] sampled = GameDataSource.getInstance().loadTeamColorRgb(tcIdx, modelDir, rootDir);
+        if (sampled != null) {
+            return sampled;
+        }
+        return DEFAULT_TEAM_COLORS[Math.max(0, Math.min(DEFAULT_TEAM_COLORS.length - 1, tcIdx))];
     }
 
     private static int createSolidColorTexture(int[] rgb) {

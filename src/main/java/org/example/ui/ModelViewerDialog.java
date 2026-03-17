@@ -379,10 +379,12 @@ public final class ModelViewerDialog extends JDialog {
 
         // Team color selector
         JPanel tcRow = flowRow("Team Color:");
-        String[] tcNames = {"Red", "Blue", "Teal", "Purple", "Yellow", "Orange",
-                "Green", "Pink", "Gray", "Light Blue", "Dark Green", "Brown"};
-        JComboBox<String> tcCombo = new JComboBox<>(tcNames);
-        tcCombo.setSelectedIndex(0);
+        JComboBox<String> tcCombo = new JComboBox<>(TeamColorOptions.labels());
+        tcCombo.setSelectedIndex(previewCanvas != null ? previewCanvas.getTeamColor() : 0);
+        tcCombo.setRenderer(new TeamColorComboRenderer(tcCombo, idx -> {
+            int[] rgb = GameDataSource.getInstance().loadTeamColorRgb(idx, asset.path().getParent(), scanRoot);
+            return rgb != null ? rgb : TeamColorOptions.fallbackRgb(idx);
+        }));
         tcCombo.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setTeamColor(tcCombo.getSelectedIndex());
         });

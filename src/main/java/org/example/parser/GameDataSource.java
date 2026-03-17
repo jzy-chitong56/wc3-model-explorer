@@ -134,6 +134,40 @@ public final class GameDataSource {
         return !sources.isEmpty();
     }
 
+    public BufferedImage loadTeamColorTexture(int teamColorIdx, Path modelDir, Path rootDir) {
+        return loadTexture(teamColorPath(teamColorIdx), modelDir, rootDir);
+    }
+
+    public int[] loadTeamColorRgb(int teamColorIdx, Path modelDir, Path rootDir) {
+        BufferedImage img = loadTeamColorTexture(teamColorIdx, modelDir, rootDir);
+        if (img == null) {
+            return null;
+        }
+
+        long r = 0, g = 0, b = 0, count = 0;
+        for (int y = 0; y < img.getHeight(); y++) {
+            for (int x = 0; x < img.getWidth(); x++) {
+                int argb = img.getRGB(x, y);
+                int alpha = (argb >>> 24) & 0xFF;
+                if (alpha == 0) {
+                    continue;
+                }
+                r += (argb >>> 16) & 0xFF;
+                g += (argb >>> 8) & 0xFF;
+                b += argb & 0xFF;
+                count++;
+            }
+        }
+        if (count == 0) {
+            return null;
+        }
+        return new int[]{
+                (int) Math.round((double) r / count),
+                (int) Math.round((double) g / count),
+                (int) Math.round((double) b / count)
+        };
+    }
+
     /**
      * Determines where a texture can be found without loading it.
      * @return "DISK", "CASC", "MPQ", "REPLACEABLE", or "MISSING"
@@ -173,6 +207,11 @@ public final class GameDataSource {
         if (Files.isRegularFile(dir.resolve(normalised))) return true;
         int slash = normalised.lastIndexOf('/');
         return slash >= 0 && Files.isRegularFile(dir.resolve(normalised.substring(slash + 1)));
+    }
+
+    private static String teamColorPath(int teamColorIdx) {
+        int idx = Math.max(0, teamColorIdx);
+        return String.format(Locale.ROOT, "ReplaceableTextures\\TeamColor\\TeamColor%02d.blp", idx);
     }
 
     private boolean existsInSources(String normalised) {
