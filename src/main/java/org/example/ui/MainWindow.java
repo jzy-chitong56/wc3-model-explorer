@@ -136,7 +136,7 @@ public final class MainWindow extends JFrame {
         topPanel.add(filterRow, BorderLayout.SOUTH);
         buildAdvancedFiltersPanel();
 
-        assetList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        assetList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         assetList.setCellRenderer(new AssetCellRenderer());
         assetList.setLayoutOrientation(JList.HORIZONTAL_WRAP);
         assetList.setVisibleRowCount(-1);
@@ -224,10 +224,12 @@ public final class MainWindow extends JFrame {
                 if (!e.isPopupTrigger()) return;
                 int idx = assetList.locationToIndex(e.getPoint());
                 if (idx < 0) return;
-                assetList.setSelectedIndex(idx);
-                ModelAsset asset = assetList.getSelectedValue();
-                if (asset == null) return;
-                showAssetContextMenu(asset, e.getComponent(), e.getX(), e.getY());
+                if (!assetList.isSelectedIndex(idx)) {
+                    assetList.setSelectedIndex(idx);
+                }
+                List<ModelAsset> selectedAssets = selectedAssets();
+                if (selectedAssets.isEmpty()) return;
+                showAssetContextMenu(selectedAssets, e.getComponent(), e.getX(), e.getY());
             }
         });
     }
@@ -375,25 +377,29 @@ public final class MainWindow extends JFrame {
         }
     }
 
-    private void showAssetContextMenu(ModelAsset asset, java.awt.Component comp, int x, int y) {
+    private void showAssetContextMenu(List<ModelAsset> assets, java.awt.Component comp, int x, int y) {
         javax.swing.JPopupMenu popup = new javax.swing.JPopupMenu();
+        boolean multiple = assets.size() > 1;
 
         // Copy path
-        javax.swing.JMenuItem copyPathItem = new javax.swing.JMenuItem("Copy Path");
+        javax.swing.JMenuItem copyPathItem = new javax.swing.JMenuItem(multiple ? "Copy Paths" : "Copy Path");
         copyPathItem.addActionListener(e -> {
-            String path = asset.path().toAbsolutePath().toString();
+            String path = assets.stream()
+                    .map(a -> a.path().toAbsolutePath().toString())
+                    .collect(Collectors.joining(System.lineSeparator()));
             java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
                     .setContents(new java.awt.datatransfer.StringSelection(path), null);
         });
         popup.add(copyPathItem);
 
-        javax.swing.JMenuItem copyFileItem = new javax.swing.JMenuItem("Copy File");
-        copyFileItem.addActionListener(e -> copyAssetFileToClipboard(asset));
+        javax.swing.JMenuItem copyFileItem = new javax.swing.JMenuItem(multiple ? "Copy Files" : "Copy File");
+        copyFileItem.addActionListener(e -> copyAssetFilesToClipboard(assets));
         popup.add(copyFileItem);
 
         // External programs
         List<ExternalProgram> programs = settings.externalPrograms();
-        if (!programs.isEmpty()) {
+        if (!multiple && !programs.isEmpty()) {
+            ModelAsset asset = assets.get(0);
             popup.addSeparator();
             if (programs.size() == 1) {
                 ExternalProgram p = programs.get(0);
@@ -434,10 +440,17 @@ public final class MainWindow extends JFrame {
         }
     }
 
-    private void copyAssetFileToClipboard(ModelAsset asset) {
-        File file = asset.path().toFile();
+    private void copyAssetFilesToClipboard(List<ModelAsset> assets) {
+        List<File> files = assets.stream()
+                .map(asset -> asset.path().toFile())
+                .toList();
         java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
-                .setContents(new FileListTransferable(Collections.singletonList(file)), null);
+                .setContents(new FileListTransferable(files), null);
+    }
+
+    private List<ModelAsset> selectedAssets() {
+        List<ModelAsset> selected = assetList.getSelectedValuesList();
+        return selected.isEmpty() ? Collections.emptyList() : selected;
     }
 
     /** Splits a command string into tokens, respecting double-quoted segments. */
@@ -465,11 +478,13 @@ public final class MainWindow extends JFrame {
     private final class AssetFileTransferHandler extends TransferHandler {
         @Override
         protected Transferable createTransferable(JComponent c) {
-            ModelAsset asset = assetList.getSelectedValue();
-            if (asset == null) {
+            List<ModelAsset> assets = selectedAssets();
+            if (assets.isEmpty()) {
                 return null;
             }
-            return new FileListTransferable(Collections.singletonList(asset.path().toFile()));
+            return new FileListTransferable(assets.stream()
+                    .map(asset -> asset.path().toFile())
+                    .toList());
         }
 
         @Override
