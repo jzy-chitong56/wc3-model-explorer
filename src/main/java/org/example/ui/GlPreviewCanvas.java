@@ -1069,10 +1069,47 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         return false;
     }
 
+    /**
+     * Computes the camera rotation quaternion in model space (Z-up WC3 coordinates).
+     * This tells billboard nodes which direction the camera is facing from.
+     *
+     * The view matrix applies: translate * Rx(pitch) * Ry(yaw) * Rx(-90)
+     * The camera rotation in model space (Z-up) is the inverse of the
+     * rotational part: Rx(90) * Ry(-yaw) * Rx(-pitch)
+     */
+    private float[] computeCameraRotationQuat() {
+        // Build the inverse camera rotation in Z-up model space
+        // Rx(90) * Ry(-yaw) * Rx(-pitch)
+        float[] q = quatFromEulerX(90f);
+        q = quatMul(q, quatFromEulerY(-yawDegrees));
+        q = quatMul(q, quatFromEulerX(-pitchDegrees));
+        return q;
+    }
+
+    private static float[] quatFromEulerX(float degrees) {
+        float r = (float) Math.toRadians(degrees) * 0.5f;
+        return new float[]{(float) Math.sin(r), 0, 0, (float) Math.cos(r)};
+    }
+
+    private static float[] quatFromEulerY(float degrees) {
+        float r = (float) Math.toRadians(degrees) * 0.5f;
+        return new float[]{0, (float) Math.sin(r), 0, (float) Math.cos(r)};
+    }
+
+    private static float[] quatMul(float[] a, float[] b) {
+        return new float[]{
+            a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
+            a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
+            a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
+            a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2]
+        };
+    }
+
     private void uploadAnimatedVertices() {
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
+        float[] cameraRot = computeCameraRotationQuat();
         Map<Integer, float[]> worldMap = BoneAnimator.computeWorldMatrices(
-                animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences());
+                animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), cameraRot);
 
         // Update flat combined buffer
         int meshVertOffset = 0;
@@ -1119,7 +1156,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         for (int bid : g[gi]) { float[] m = wm.get(bid); if (m!=null){for(int j=0;j<16;j++)avg[j]+=m[j];cnt++;} }
         if (cnt == 0) return new float[]{bx,by,bz};
         float inv = 1f/cnt; for(int j=0;j<16;j++) avg[j]*=inv;
-        return new float[]{ avg[0]*bx+avg[4]*by+avg[8]*bz+avg[12], avg[1]*bx+avg[5]*by+avg[9]*bz+avg[13], avg[2]*bx+avg[6]*by+avg[10]*bz+avg[14] };
+        return new float[]{
+                avg[0]*bx+avg[4]*by+avg[8]*bz+avg[12],
+                avg[1]*bx+avg[5]*by+avg[9]*bz+avg[13],
+                avg[2]*bx+avg[6]*by+avg[10]*bz+avg[14]
+        };
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -1734,9 +1775,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         Map<Integer, float[]> worldMap;
         if (currentSeqIdx >= 0 && animData.hasAnimation()) {
             SequenceInfo seq = animData.sequences().get(currentSeqIdx);
-            worldMap = BoneAnimator.computeWorldMatrices(bones, animTimeMs, seq.start(), seq.end(), animData.globalSequences());
+            float[] camRot = computeCameraRotationQuat();
+            worldMap = BoneAnimator.computeWorldMatrices(bones, animTimeMs, seq.start(), seq.end(), animData.globalSequences(), camRot);
         } else {
-            worldMap = BoneAnimator.computeWorldMatrices(bones, 0, 0, 0, animData.globalSequences());
+            float[] camRot = computeCameraRotationQuat();
+            worldMap = BoneAnimator.computeWorldMatrices(bones, 0, 0, 0, animData.globalSequences(), camRot);
         }
         lastWorldMap = worldMap;
 

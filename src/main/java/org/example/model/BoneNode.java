@@ -15,6 +15,9 @@ public record BoneNode(
     public enum NodeType { BONE, HELPER, ATTACHMENT }
 
     // Billboard flag masks from MdlxGenericObject
+    public static final int FLAG_DONT_INHERIT_TRANSLATION = 0x1;
+    public static final int FLAG_DONT_INHERIT_ROTATION    = 0x2;
+    public static final int FLAG_DONT_INHERIT_SCALING     = 0x4;
     public static final int FLAG_BILLBOARDED        = 0x8;
     public static final int FLAG_BILLBOARDED_LOCK_X = 0x10;
     public static final int FLAG_BILLBOARDED_LOCK_Y = 0x20;
@@ -24,6 +27,18 @@ public record BoneNode(
     public boolean isBillboarded() {
         return (flags & (FLAG_BILLBOARDED | FLAG_BILLBOARDED_LOCK_X
                        | FLAG_BILLBOARDED_LOCK_Y | FLAG_BILLBOARDED_LOCK_Z)) != 0;
+    }
+
+    public boolean inheritsTranslation() {
+        return (flags & FLAG_DONT_INHERIT_TRANSLATION) == 0;
+    }
+
+    public boolean inheritsRotation() {
+        return (flags & FLAG_DONT_INHERIT_ROTATION) == 0;
+    }
+
+    public boolean inheritsScaling() {
+        return (flags & FLAG_DONT_INHERIT_SCALING) == 0;
     }
 
     /** Backwards-compatible constructor without name/type/flags. */

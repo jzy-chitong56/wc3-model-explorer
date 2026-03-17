@@ -14,6 +14,8 @@ import java.util.Map;
  *   boneWorld = parentWorld × boneLocal
  */
 public final class BoneAnimator {
+    private static final float[] FULL_BILLBOARD_AXIS_CORRECTION =
+            quatFromAxisAngle(0, 1, 0, (float) (Math.PI * 0.5));
 
     private BoneAnimator() {}
 
@@ -21,30 +23,44 @@ public final class BoneAnimator {
      * Returns a map from objectId → 4×4 column-major world matrix for every
      * bone in the supplied array.
      *
-     * Billboard nodes cancel their parent's world rotation so that their
-     * local rotation is applied in world space (matching RenderNode2.java):
-     *   computedRotation = localRotation * inverse(parentWorldRotation)
+     * Billboard nodes orient to face the camera. The {@code cameraRotation}
+     * quaternion [x,y,z,w] represents the camera orientation in model space
+     * (Z-up WC3 coordinates). If null, billboards fall back to cancelling
+     * parent rotation only.
      *
-     * @param bones     all skeleton nodes (bones + helpers)
-     * @param timeMs    current absolute animation time in milliseconds
-     * @param seqStart  sequence interval start (ms)
-     * @param seqEnd    sequence interval end   (ms)
+     * @param bones           all skeleton nodes (bones + helpers)
+     * @param timeMs          current absolute animation time in milliseconds
+     * @param seqStart        sequence interval start (ms)
+     * @param seqEnd          sequence interval end   (ms)
      */
     public static Map<Integer, float[]> computeWorldMatrices(
             BoneNode[] bones, long timeMs, long seqStart, long seqEnd) {
-        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, null);
+        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, null, null);
     }
 
     public static Map<Integer, float[]> computeWorldMatrices(
             BoneNode[] bones, long timeMs, long seqStart, long seqEnd, long[] globalSequences) {
+        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, globalSequences, null);
+    }
+
+    /**
+     * @param cameraRotation camera orientation quaternion [x,y,z,w] in model space (Z-up),
+     *                       or null to disable camera-facing billboards
+     */
+    public static Map<Integer, float[]> computeWorldMatrices(
+            BoneNode[] bones, long timeMs, long seqStart, long seqEnd,
+            long[] globalSequences, float[] cameraRotation) {
 
         Map<Integer, float[]> worldMatrices = new HashMap<>(bones.length * 2);
         Map<Integer, float[]> worldRotations = new HashMap<>(bones.length * 2);
+        Map<Integer, float[]> worldTranslations = new HashMap<>(bones.length * 2);
+        Map<Integer, float[]> worldScales = new HashMap<>(bones.length * 2);
         Map<Integer, BoneNode> byId = new HashMap<>(bones.length * 2);
         for (BoneNode b : bones) byId.put(b.objectId(), b);
 
         for (BoneNode bone : bones) {
-            computeWorldMatrix(bone, byId, worldMatrices, worldRotations, timeMs, seqStart, seqEnd, globalSequences);
+            computeWorldMatrix(bone, byId, worldMatrices, worldRotations, worldTranslations, worldScales,
+                    timeMs, seqStart, seqEnd, globalSequences, cameraRotation);
         }
         return worldMatrices;
     }
@@ -56,7 +72,10 @@ public final class BoneAnimator {
             Map<Integer, BoneNode> byId,
             Map<Integer, float[]> matCache,
             Map<Integer, float[]> rotCache,
-            long t, long s0, long s1, long[] globalSequences) {
+            Map<Integer, float[]> translationCache,
+            Map<Integer, float[]> scaleCache,
+            long t, long s0, long s1, long[] globalSequences,
+            float[] cameraRotation) {
 
         if (matCache.containsKey(bone.objectId())) {
             return matCache.get(bone.objectId());
@@ -65,12 +84,17 @@ public final class BoneAnimator {
         // Get parent world matrix and world rotation
         float[] parentWorldMatrix = IDENTITY;
         float[] parentWorldRot = IDENTITY_QUAT;
+        float[] parentWorldTranslation = ZERO_VEC3;
+        float[] parentWorldScale = ONE_VEC3;
         if (bone.parentId() >= 0) {
             BoneNode parent = byId.get(bone.parentId());
             if (parent != null) {
-                computeWorldMatrix(parent, byId, matCache, rotCache, t, s0, s1, globalSequences);
+                computeWorldMatrix(parent, byId, matCache, rotCache, translationCache, scaleCache,
+                        t, s0, s1, globalSequences, cameraRotation);
                 parentWorldMatrix = matCache.getOrDefault(parent.objectId(), IDENTITY);
                 parentWorldRot = rotCache.getOrDefault(parent.objectId(), IDENTITY_QUAT);
+                parentWorldTranslation = translationCache.getOrDefault(parent.objectId(), ZERO_VEC3);
+                parentWorldScale = scaleCache.getOrDefault(parent.objectId(), ONE_VEC3);
             }
         }
 
@@ -83,11 +107,19 @@ public final class BoneAnimator {
         float[] tr = interpTrackVec3(bone.trans(), t, s0, s1, globalSequences, 0f, 0f, 0f);
         float[] localRot = interpTrackQuat(bone.rot(), t, s0, s1, globalSequences);
         float[] sc = interpTrackVec3(bone.scale(), t, s0, s1, globalSequences, 1f, 1f, 1f);
+        float[] parentRotForChild = bone.inheritsRotation() ? parentWorldRot : IDENTITY_QUAT;
+        float[] parentScaleForChild = bone.inheritsScaling() ? parentWorldScale : ONE_VEC3;
 
-        // Billboard: cancel parent world rotation so local rotation acts in world space
+        // Billboard handling: orient the bone to face the camera
         float[] computedRot;
-        if (bone.isBillboarded()) {
-            computedRot = quatMul(localRot, quatInverse(parentWorldRot));
+        int flags = bone.flags();
+        if (bone.isBillboarded() && cameraRotation != null) {
+            // Camera-facing billboard: replace rotation with camera orientation
+            // relative to the parent's world rotation
+            computedRot = computeBillboardRotation(flags, cameraRotation, parentRotForChild, localRot);
+        } else if (bone.isBillboarded()) {
+            // Fallback without camera info: cancel parent rotation
+            computedRot = quatMul(quatInverse(parentRotForChild), localRot);
         } else {
             computedRot = localRot;
         }
@@ -98,22 +130,127 @@ public final class BoneAnimator {
         localMatrix = matMul(quatToMatrix(computedRot[0], computedRot[1], computedRot[2], computedRot[3]), localMatrix);
         localMatrix = matMul(makeTranslate(tr[0] + px, tr[1] + py, tr[2] + pz), localMatrix);
 
-        // worldMatrix = parentWorldMatrix × localMatrix
-        float[] worldMatrix = matMul(parentWorldMatrix, localMatrix);
+        float[] effectiveParentMatrix = buildEffectiveParentMatrix(
+                bone, parentWorldMatrix, parentWorldTranslation, parentRotForChild, parentScaleForChild);
+
+        // worldMatrix = effectiveParentMatrix × localMatrix
+        float[] worldMatrix = matMul(effectiveParentMatrix, localMatrix);
         matCache.put(bone.objectId(), worldMatrix);
+        translationCache.put(bone.objectId(), extractTranslation(worldMatrix));
 
         // Track world rotation for children
-        // Billboard nodes: worldRotation stays as localRotation (parent cancelled out)
-        // Normal nodes: worldRotation = parentWorldRotation * localRotation
         float[] worldRot;
         if (bone.isBillboarded()) {
-            worldRot = localRot;
+            // Billboard: world rotation is the billboard rotation (not accumulated from parent)
+            worldRot = quatMul(parentRotForChild, computedRot);
         } else {
-            worldRot = quatMul(parentWorldRot, localRot);
+            worldRot = quatMul(parentRotForChild, localRot);
         }
         rotCache.put(bone.objectId(), worldRot);
+        scaleCache.put(bone.objectId(), mulVec3(parentScaleForChild, sc));
 
         return worldMatrix;
+    }
+
+    private static float[] buildEffectiveParentMatrix(BoneNode bone,
+                                                      float[] parentWorldMatrix,
+                                                      float[] parentWorldTranslation,
+                                                      float[] parentRotForChild,
+                                                      float[] parentScaleForChild) {
+        if (bone.inheritsTranslation() && bone.inheritsRotation() && bone.inheritsScaling()) {
+            return parentWorldMatrix;
+        }
+        float[] m = identity();
+        if (bone.inheritsScaling()) {
+            m = matMul(makeScale(parentScaleForChild[0], parentScaleForChild[1], parentScaleForChild[2]), m);
+        }
+        if (bone.inheritsRotation()) {
+            m = matMul(quatToMatrix(parentRotForChild[0], parentRotForChild[1], parentRotForChild[2], parentRotForChild[3]), m);
+        }
+        if (bone.inheritsTranslation()) {
+            m = matMul(makeTranslate(parentWorldTranslation[0], parentWorldTranslation[1], parentWorldTranslation[2]), m);
+        }
+        return m;
+    }
+
+    /**
+     * Computes the local rotation for a billboard bone that makes it face the camera.
+     *
+     * For full billboard (0x8): the bone faces the camera completely.
+     * For lock-axis billboards: only rotates around the locked axis to face the camera.
+     *
+     * The result is a LOCAL rotation (to be composed with parent in the local matrix).
+     * We want: parentWorldRot * result = cameraRot
+     * So: result = inverse(parentWorldRot) * cameraRot
+     */
+    private static float[] computeBillboardRotation(int flags, float[] cameraRot,
+                                                     float[] parentWorldRot, float[] localRot) {
+        float[] invParent = quatInverse(parentWorldRot);
+        float[] billboardBase;
+
+        if ((flags & BoneNode.FLAG_BILLBOARDED) != 0) {
+            // Full billboard: face camera completely
+            billboardBase = quatMul(invParent, cameraRot);
+            return applyBillboardLocalRotation(applyFullBillboardAxisCorrection(billboardBase), localRot);
+        }
+
+        // Lock-axis billboards: extract camera direction in parent-local space,
+        // then rotate only around the locked axis to face it.
+        // Get the camera forward direction in world space (camera looks along -Z in its local frame)
+        float[] camFwd = quatRotateVec3(cameraRot, 0, 0, -1);
+        // Transform to parent-local space
+        float[] localFwd = quatRotateVec3(invParent, camFwd[0], camFwd[1], camFwd[2]);
+
+        if ((flags & BoneNode.FLAG_BILLBOARDED_LOCK_Z) != 0) {
+            // Rotate around Z axis (WC3 up axis) to face camera
+            float angle = (float) Math.atan2(localFwd[1], localFwd[0]);
+            billboardBase = quatFromAxisAngle(0, 0, 1, angle + (float)(Math.PI * 0.5));
+            return applyBillboardLocalRotation(billboardBase, localRot);
+        } else if ((flags & BoneNode.FLAG_BILLBOARDED_LOCK_Y) != 0) {
+            // Rotate around Y axis
+            float angle = (float) Math.atan2(localFwd[0], localFwd[2]);
+            billboardBase = quatFromAxisAngle(0, 1, 0, angle);
+            return applyBillboardLocalRotation(billboardBase, localRot);
+        } else if ((flags & BoneNode.FLAG_BILLBOARDED_LOCK_X) != 0) {
+            // Rotate around X axis
+            float angle = (float) Math.atan2(localFwd[2], localFwd[1]);
+            billboardBase = quatFromAxisAngle(1, 0, 0, angle);
+            return applyBillboardLocalRotation(billboardBase, localRot);
+        }
+
+        // Fallback
+        billboardBase = quatMul(invParent, cameraRot);
+        return applyBillboardLocalRotation(billboardBase, localRot);
+    }
+
+    private static float[] applyBillboardLocalRotation(float[] billboardBase, float[] localRot) {
+        return quatMul(billboardBase, localRot);
+    }
+
+    private static float[] applyFullBillboardAxisCorrection(float[] billboardBase) {
+        return quatMul(billboardBase, FULL_BILLBOARD_AXIS_CORRECTION);
+    }
+
+    private static float[] extractTranslation(float[] matrix) {
+        return new float[]{matrix[12], matrix[13], matrix[14]};
+    }
+
+    private static float[] mulVec3(float[] a, float[] b) {
+        return new float[]{a[0] * b[0], a[1] * b[1], a[2] * b[2]};
+    }
+
+    /** Rotate a vector by a quaternion: q * v * q^-1. */
+    private static float[] quatRotateVec3(float[] q, float vx, float vy, float vz) {
+        float[] vq = {vx, vy, vz, 0};
+        float[] result = quatMul(quatMul(q, vq), quatInverse(q));
+        return new float[]{result[0], result[1], result[2]};
+    }
+
+    /** Create a quaternion from axis-angle (axis must be unit length). */
+    private static float[] quatFromAxisAngle(float ax, float ay, float az, float angle) {
+        float ha = angle * 0.5f;
+        float s = (float) Math.sin(ha);
+        return new float[]{ax * s, ay * s, az * s, (float) Math.cos(ha)};
     }
 
     /** Hamilton product of two quaternions [x,y,z,w]. */
@@ -416,6 +553,8 @@ public final class BoneAnimator {
 
     private static final float[] IDENTITY = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     private static final float[] IDENTITY_QUAT = {0f, 0f, 0f, 1f};
+    private static final float[] ZERO_VEC3 = {0f, 0f, 0f};
+    private static final float[] ONE_VEC3 = {1f, 1f, 1f};
 
     static float[] identity() {
         return new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
