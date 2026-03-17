@@ -72,7 +72,8 @@ public final class ReterasModelParser {
             }
             ModelMesh mesh = buildMesh(model);
             return new ReterasParsedModel(buildMetadata(model), mesh, buildAnimData(model),
-                    buildTexData(model), buildCameras(model), buildCollisionShapes(model));
+                    buildTexData(model), buildCameras(model), buildCollisionShapes(model),
+                    buildMaterials(model));
         } catch (IOException | RuntimeException ex) {
             return ReterasParsedModel.EMPTY;
         }
@@ -176,55 +177,70 @@ public final class ReterasModelParser {
             if (g == null || g.vertices == null || g.faces == null
                     || g.vertices.length < 3 || g.faces.length < 3) continue;
 
-            // UV set 0 (flat [u0,v0, u1,v1, ...])
-            float[] uvs = null;
-            if (g.uvSets != null && g.uvSets.length > 0 && g.uvSets[0] != null) {
-                uvs = g.uvSets[0].clone();
+            // All UV sets
+            float[][] uvSets;
+            if (g.uvSets != null && g.uvSets.length > 0) {
+                uvSets = new float[g.uvSets.length][];
+                for (int u = 0; u < g.uvSets.length; u++) {
+                    uvSets[u] = (g.uvSets[u] != null) ? g.uvSets[u].clone() : new float[0];
+                }
+            } else {
+                uvSets = new float[][]{new float[0]};
             }
 
-            // Resolve texture by scanning ALL layers in the material.
-            // Find: base texture layer (replaceableId=0) and team color layer (replaceableId=1 or 2).
-            String texPath = "";
-            int filterMode = 0;
-            int replaceableId = 0;
+            // Build per-layer data from the material
+            List<GeosetTexData.LayerTexData> layers = new ArrayList<>();
+            String effectiveTexPath = "";
+            int effectiveFilterMode = 0;
+            int effectiveReplaceableId = 0;
+
             int matIdx = (int) g.materialId;
             if (matIdx >= 0 && matIdx < model.materials.size()) {
                 MdlxMaterial mat = model.materials.get(matIdx);
                 if (mat != null) {
-                    MdlxLayer baseLayer = null;
                     boolean foundTc = false;
                     int tcReplId = 0;
 
                     for (MdlxLayer layer : mat.layers) {
                         if (layer == null) continue;
                         int texIdx = layer.textureId;
-                        if (texIdx < 0 || texIdx >= model.textures.size()) continue;
-                        MdlxTexture tex = model.textures.get(texIdx);
-                        if (tex == null) continue;
+                        String lTexPath = "";
+                        int lReplId = 0;
+                        if (texIdx >= 0 && texIdx < model.textures.size()) {
+                            MdlxTexture tex = model.textures.get(texIdx);
+                            if (tex != null) {
+                                lReplId = tex.replaceableId;
+                                if (texIdx < texturePaths.size()) lTexPath = texturePaths.get(texIdx);
+                            }
+                        }
+                        int lFilterMode = layer.filterMode != null ? layer.filterMode.ordinal() : 0;
+                        int lCoordId = (int) layer.coordId;
+                        layers.add(new GeosetTexData.LayerTexData(
+                                lTexPath, lFilterMode, lReplId, layer.alpha, layer.flags, lCoordId));
 
-                        if ((tex.replaceableId == 1 || tex.replaceableId == 2) && !foundTc) {
+                        if ((lReplId == 1 || lReplId == 2) && !foundTc) {
                             foundTc = true;
-                            tcReplId = tex.replaceableId;
-                        } else if (tex.replaceableId == 0 && baseLayer == null) {
-                            baseLayer = layer;
+                            tcReplId = lReplId;
                         }
                     }
 
-                    if (foundTc) replaceableId = tcReplId;
+                    if (foundTc) effectiveReplaceableId = tcReplId;
 
-                    // Use base layer for texture path and filter mode; fall back to first layer
-                    MdlxLayer effectiveLayer = baseLayer != null ? baseLayer : (!mat.layers.isEmpty() ? mat.layers.get(0) : null);
-                    if (effectiveLayer != null) {
-                        filterMode = effectiveLayer.filterMode != null ? effectiveLayer.filterMode.ordinal() : 0;
-                        int texIdx = effectiveLayer.textureId;
-                        if (texIdx >= 0 && texIdx < texturePaths.size()) {
-                            texPath = texturePaths.get(texIdx);
-                        }
+                    // Effective layer: first non-TC layer, or first layer
+                    GeosetTexData.LayerTexData effective = null;
+                    for (GeosetTexData.LayerTexData l : layers) {
+                        if (l.replaceableId() == 0) { effective = l; break; }
+                    }
+                    if (effective == null && !layers.isEmpty()) effective = layers.get(0);
+                    if (effective != null) {
+                        effectiveTexPath = effective.texturePath();
+                        effectiveFilterMode = effective.filterMode();
                     }
                 }
             }
 
-            result.add(new GeosetTexData(uvs != null ? uvs : new float[0], texPath, filterMode, replaceableId));
+            result.add(new GeosetTexData(uvSets, List.copyOf(layers),
+                    effectiveTexPath, effectiveFilterMode, effectiveReplaceableId));
         }
         return result.toArray(new GeosetTexData[0]);
     }
@@ -296,9 +312,10 @@ public final class ReterasModelParser {
                 geosets.add(GeosetSkinData.EMPTY);
                 continue;
             }
+            int geoMatId = (int) g.materialId;
             // HD models have the 'skin' short[] array; skip skinning for them (use bind pose)
             if (g.skin != null && g.skin.length > 0) {
-                geosets.add(new GeosetSkinData(g.vertices.clone(), new int[0], new int[0][]));
+                geosets.add(new GeosetSkinData(g.vertices.clone(), new int[0], new int[0][], geoMatId));
                 continue;
             }
 
@@ -327,7 +344,7 @@ public final class ReterasModelParser {
                 }
             }
 
-            geosets.add(new GeosetSkinData(g.vertices.clone(), vertexGroup, groupBoneIds));
+            geosets.add(new GeosetSkinData(g.vertices.clone(), vertexGroup, groupBoneIds, geoMatId));
         }
 
         // Geoset animation alpha (KGAO)
@@ -498,6 +515,46 @@ public final class ReterasModelParser {
             result.add(new CollisionShape(type, verts, cs.boundsRadius));
         }
         return result.toArray(CollisionShape[]::new);
+    }
+
+    // ── Materials ────────────────────────────────────────────────────────────
+
+    private static MaterialInfo[] buildMaterials(MdlxModel model) {
+        if (model.materials == null || model.materials.isEmpty()) return MaterialInfo.EMPTY_ARRAY;
+
+        // Build texture path lookup
+        List<String> texPaths = new ArrayList<>();
+        for (MdlxTexture t : model.textures) {
+            texPaths.add(t != null && t.path != null ? t.path.trim() : "");
+        }
+
+        MaterialInfo[] result = new MaterialInfo[model.materials.size()];
+        for (int mi = 0; mi < model.materials.size(); mi++) {
+            MdlxMaterial mat = model.materials.get(mi);
+            List<MaterialInfo.LayerInfo> layers = new ArrayList<>();
+            if (mat != null && mat.layers != null) {
+                for (MdlxLayer layer : mat.layers) {
+                    if (layer == null) continue;
+                    int texId = layer.textureId;
+                    String texPath = (texId >= 0 && texId < texPaths.size()) ? texPaths.get(texId) : "";
+                    int replId = 0;
+                    if (texId >= 0 && texId < model.textures.size() && model.textures.get(texId) != null) {
+                        replId = model.textures.get(texId).replaceableId;
+                    }
+                    int fm = layer.filterMode != null ? layer.filterMode.ordinal() : 0;
+                    layers.add(new MaterialInfo.LayerInfo(
+                            fm, layer.flags, texId, texPath, replId,
+                            layer.alpha, layer.textureAnimationId, layer.coordId));
+                }
+            }
+            result[mi] = new MaterialInfo(
+                    mi,
+                    mat != null ? mat.priorityPlane : 0,
+                    mat != null ? mat.flags : 0,
+                    mat != null && mat.shader != null ? mat.shader : "",
+                    List.copyOf(layers));
+        }
+        return result;
     }
 
     // ── Utility ──────────────────────────────────────────────────────────────

@@ -9,10 +9,16 @@ package org.example.model;
 public record GeosetSkinData(
         float[]   bindVertices,
         int[]     vertexGroup,
-        int[][]   groupBoneObjectIds
+        int[][]   groupBoneObjectIds,
+        int       materialId
 ) {
     public static final GeosetSkinData EMPTY =
-            new GeosetSkinData(new float[0], new int[0], new int[0][]);
+            new GeosetSkinData(new float[0], new int[0], new int[0][], -1);
+
+    /** Backwards-compatible constructor without materialId. */
+    public GeosetSkinData(float[] bindVertices, int[] vertexGroup, int[][] groupBoneObjectIds) {
+        this(bindVertices, vertexGroup, groupBoneObjectIds, -1);
+    }
 
     public int vertexCount() {
         return bindVertices.length / 3;

@@ -286,7 +286,7 @@ public final class ThumbnailRenderer {
         int[] geoUvVbo = new int[geoCount];
         int[] geoEbo = new int[geoCount];
         int[] geoIndexCount = new int[geoCount];
-        int[] geoTex = new int[geoCount];
+        int[][] geoTex = new int[geoCount][];
 
         ModelAnimData animData = parsed.animData() != null ? parsed.animData() : ModelAnimData.EMPTY;
         int[] allIndices = mesh.indices();
@@ -421,26 +421,17 @@ public final class ThumbnailRenderer {
                 glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices, GL_STATIC_DRAW);
                 glBindVertexArray(0);
 
-                // Load texture
-                String texPath = texData[gi].texturePath();
-                int replId = texData[gi].replaceableId();
-                if (replId == 1 && !texPath.isEmpty()) {
-                    geoTex[gi] = loadTeamColorTexture(texPath, TEAM_COLOR_IDX, modelDir, rootDir);
-                } else if (replId == 1) {
-                    geoTex[gi] = createSolidColorTexture(TEAM_COLORS[TEAM_COLOR_IDX]);
-                } else if (replId == 2) {
-                    // Team glow: load glow texture, fallback to team color
-                    String glowPath = String.format(
-                            "ReplaceableTextures\\TeamGlow\\TeamGlow%02d.blp", TEAM_COLOR_IDX);
-                    geoTex[gi] = loadGlTexture(glowPath, modelDir, rootDir);
-                    if (geoTex[gi] == 0 && !texPath.isEmpty()) {
-                        geoTex[gi] = loadGlTexture(texPath, modelDir, rootDir);
+                // Load textures for all material layers
+                var layers = texData[gi].layers();
+                if (!layers.isEmpty()) {
+                    geoTex[gi] = new int[layers.size()];
+                    for (int li = 0; li < layers.size(); li++) {
+                        var layer = layers.get(li);
+                        geoTex[gi][li] = loadLayerTexture(layer.texturePath(), layer.replaceableId(), TEAM_COLOR_IDX, modelDir, rootDir);
                     }
-                    if (geoTex[gi] == 0) {
-                        geoTex[gi] = createSolidColorTexture(TEAM_COLORS[TEAM_COLOR_IDX]);
-                    }
-                } else if (!texPath.isEmpty()) {
-                    geoTex[gi] = loadGlTexture(texPath, modelDir, rootDir);
+                } else {
+                    geoTex[gi] = new int[1];
+                    geoTex[gi][0] = loadLayerTexture(texData[gi].texturePath(), texData[gi].replaceableId(), TEAM_COLOR_IDX, modelDir, rootDir);
                 }
 
                 indexOffset += faceCount;
@@ -474,31 +465,24 @@ public final class ThumbnailRenderer {
         glUseProgram(texShader);
         glUniformMatrix4fv(texMvpLoc, false, mvp);
 
-        // Pass 1: opaque
+        // Pass 1: opaque layers
         for (int i = 0; i < geoCount; i++) {
             if (geoVao[i] == 0 || geoIndexCount[i] == 0) continue;
-            if (!texData[i].isOpaque()) continue;
             if (geoAlpha[i] <= 0f) continue;
             setUVTransform(geoUVTransforms, i);
             setGeosetColor(geoColor, i);
-            drawGeoset(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i]);
+            drawGeosetLayers(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i], true);
         }
 
-        // Pass 2: transparent
+        // Pass 2: transparent layers
         glEnable(GL_BLEND);
         glDepthMask(false);
         for (int i = 0; i < geoCount; i++) {
             if (geoVao[i] == 0 || geoIndexCount[i] == 0) continue;
-            if (texData[i].isOpaque()) continue;
             if (geoAlpha[i] <= 0f) continue;
-            if (texData[i].replaceableId() == 2) {
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-            } else {
-                GlPreviewCanvas.applyBlendMode(texData[i].filterMode());
-            }
             setUVTransform(geoUVTransforms, i);
             setGeosetColor(geoColor, i);
-            drawGeoset(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i]);
+            drawGeosetLayers(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i], false);
         }
         glDepthMask(true);
         glDisable(GL_BLEND);
@@ -540,7 +524,9 @@ public final class ThumbnailRenderer {
             if (geoVbo[i] != 0) glDeleteBuffers(geoVbo[i]);
             if (geoUvVbo[i] != 0) glDeleteBuffers(geoUvVbo[i]);
             if (geoEbo[i] != 0) glDeleteBuffers(geoEbo[i]);
-            if (geoTex[i] != 0) glDeleteTextures(geoTex[i]);
+            if (geoTex[i] != null) {
+                for (int t : geoTex[i]) { if (t != 0) glDeleteTextures(t); }
+            }
         }
 
         return img;
@@ -564,16 +550,47 @@ public final class ThumbnailRenderer {
         }
     }
 
-    private void drawGeoset(int gi, int[] geoVao, int[] geoIndexCount, int[] geoTex,
-                            GeosetTexData[] texData, float alpha) {
-        boolean hasTex = geoTex[gi] != 0;
+    private void drawGeosetLayers(int gi, int[] geoVao, int[] geoIndexCount, int[][] geoTex,
+                                    GeosetTexData[] texData, float geoAlpha, boolean opaquePass) {
+        if (geoTex[gi] == null) return;
+        var layers = texData[gi].layers();
+        int layerCount = geoTex[gi].length;
+
+        if (layers.isEmpty()) {
+            // Legacy single-layer fallback
+            boolean isOpaque = texData[gi].isOpaque();
+            if (opaquePass != isOpaque) return;
+            if (!opaquePass) GlPreviewCanvas.applyBlendMode(texData[gi].filterMode());
+            drawSingleLayer(gi, 0, texData[gi].filterMode(), 1.0f, geoVao, geoIndexCount, geoTex, geoAlpha);
+            return;
+        }
+
+        for (int li = 0; li < Math.min(layerCount, layers.size()); li++) {
+            var layer = layers.get(li);
+            boolean layerOpaque = layer.isOpaque();
+            if (opaquePass != layerOpaque) continue;
+
+            if (!opaquePass) {
+                if (layer.replaceableId() == 2) {
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+                } else {
+                    GlPreviewCanvas.applyBlendMode(layer.filterMode());
+                }
+            }
+            drawSingleLayer(gi, li, layer.filterMode(), layer.alpha(), geoVao, geoIndexCount, geoTex, geoAlpha);
+        }
+    }
+
+    private void drawSingleLayer(int gi, int li, int filterMode, float layerAlpha,
+                                  int[] geoVao, int[] geoIndexCount, int[][] geoTex, float geoAlpha) {
+        boolean hasTex = geoTex[gi] != null && li < geoTex[gi].length && geoTex[gi][li] != 0;
         glUniform1i(texHasTexLoc, hasTex ? 1 : 0);
-        float threshold = texData[gi].filterMode() == 1 ? 0.75f : 0.0f;
+        float threshold = (filterMode == 1) ? 0.75f : 0.0f;
         glUniform1f(texAlphaThreshLoc, threshold);
-        glUniform1f(texAlphaLoc, alpha);
+        glUniform1f(texAlphaLoc, geoAlpha * layerAlpha);
         if (hasTex) {
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, geoTex[gi]);
+            glBindTexture(GL_TEXTURE_2D, geoTex[gi][li]);
             glUniform1i(texSamplerLoc, 0);
         }
         glBindVertexArray(geoVao[gi]);
@@ -615,6 +632,23 @@ public final class ThumbnailRenderer {
     }
 
     // ── Texture loading helpers ──────────────────────────────────────────────
+
+    private static int loadLayerTexture(String texPath, int replId, int tc, Path modelDir, Path rootDir) {
+        if (replId == 1 && !texPath.isEmpty()) {
+            return loadTeamColorTexture(texPath, tc, modelDir, rootDir);
+        } else if (replId == 1) {
+            return createSolidColorTexture(TEAM_COLORS[tc]);
+        } else if (replId == 2) {
+            String glowPath = String.format("ReplaceableTextures\\TeamGlow\\TeamGlow%02d.blp", tc);
+            int tex = loadGlTexture(glowPath, modelDir, rootDir);
+            if (tex == 0 && !texPath.isEmpty()) tex = loadGlTexture(texPath, modelDir, rootDir);
+            if (tex == 0) tex = createSolidColorTexture(TEAM_COLORS[tc]);
+            return tex;
+        } else if (!texPath.isEmpty()) {
+            return loadGlTexture(texPath, modelDir, rootDir);
+        }
+        return 0;
+    }
 
     private static int loadGlTexture(String texPath, Path modelDir, Path rootDir) {
         BufferedImage img = GameDataSource.getInstance().loadTexture(texPath, modelDir, rootDir);

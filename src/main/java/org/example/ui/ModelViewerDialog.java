@@ -25,7 +25,7 @@ import java.util.Map;
 /**
  * Model viewer dialog with a split-pane layout:
  *   Left  – OpenGL 3D preview canvas
- *   Right – tabbed panel (Animation, Info, Textures, Materials)
+ *   Right – tabbed panel (Animation, Info, Textures, Materials, Geosets, Nodes)
  *
  * Layout reproduces the structure of War3AdvancedModelViewer's ModelDetailDialog.
  */
@@ -205,6 +205,7 @@ public final class ModelViewerDialog extends JDialog {
         tabs.addTab("Info", buildInfoTab());
         tabs.addTab("Textures", buildTexturesTab());
         tabs.addTab("Materials", buildMaterialsTab());
+        tabs.addTab("Geosets", buildGeosetsTab());
         if (parsedModel.animData().bones().length > 0) {
             tabs.addTab("Nodes", buildNodesTab());
         }
@@ -594,10 +595,135 @@ public final class ModelViewerDialog extends JDialog {
     // ── Materials tab ────────────────────────────────────────────────────
 
     private JPanel buildMaterialsTab() {
+        MaterialInfo[] materials = parsedModel.materials();
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(new EmptyBorder(8, 8, 8, 8));
 
-        JLabel header = new JLabel("Geoset Materials");
+        JLabel header = new JLabel("Materials (" + materials.length + ")");
+        header.setFont(header.getFont().deriveFont(Font.BOLD));
+        header.setBorder(new EmptyBorder(0, 0, 6, 0));
+        panel.add(header, BorderLayout.NORTH);
+
+        if (materials.length == 0) {
+            panel.add(new JLabel("No materials found.", JLabel.CENTER), BorderLayout.CENTER);
+            return panel;
+        }
+
+        // Build a tree: each material is a parent node, layers are children
+        DefaultMutableTreeNode root = new DefaultMutableTreeNode("Materials");
+        // Track which geosets use each material
+        Map<Integer, List<Integer>> matToGeosets = new HashMap<>();
+        ModelAnimData animData = parsedModel.animData();
+        int gi = 0;
+        for (var geoset : animData.geosets()) {
+            if (geoset.vertexCount() > 0) {
+                int matId = geoset.materialId();
+                matToGeosets.computeIfAbsent(matId, k -> new java.util.ArrayList<>()).add(gi);
+            }
+            gi++;
+        }
+
+        for (MaterialInfo mat : materials) {
+            StringBuilder matLabel = new StringBuilder();
+            matLabel.append("Material ").append(mat.index());
+            if (mat.priorityPlane() != 0) matLabel.append("  PP=").append(mat.priorityPlane());
+            if (!mat.shader().isEmpty()) matLabel.append("  Shader=").append(mat.shader());
+            List<Integer> usedBy = matToGeosets.getOrDefault(mat.index(), List.of());
+            if (!usedBy.isEmpty()) {
+                matLabel.append("  [Geoset ").append(
+                        usedBy.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", ")))
+                        .append("]");
+            }
+
+            // Material flags description
+            List<String> matFlags = new java.util.ArrayList<>();
+            if ((mat.flags() & 0x01) != 0) matFlags.add("ConstantColor");
+            if ((mat.flags() & 0x10) != 0) matFlags.add("SortPrimsFarZ");
+            if ((mat.flags() & 0x20) != 0) matFlags.add("FullResolution");
+            if (!matFlags.isEmpty()) matLabel.append("  {").append(String.join(", ", matFlags)).append("}");
+
+            DefaultMutableTreeNode matNode = new DefaultMutableTreeNode(matLabel.toString());
+
+            for (int li = 0; li < mat.layers().size(); li++) {
+                MaterialInfo.LayerInfo layer = mat.layers().get(li);
+                StringBuilder layerLabel = new StringBuilder();
+                layerLabel.append("Layer ").append(li).append(": ");
+                layerLabel.append(layer.filterModeName());
+
+                if (!layer.texturePath().isEmpty()) {
+                    layerLabel.append("  \"").append(layer.texturePath()).append("\"");
+                } else if (layer.replaceableId() == 1) {
+                    layerLabel.append("  TeamColor");
+                } else if (layer.replaceableId() == 2) {
+                    layerLabel.append("  TeamGlow");
+                } else if (layer.replaceableId() > 0) {
+                    layerLabel.append("  Replaceable(").append(layer.replaceableId()).append(")");
+                } else {
+                    layerLabel.append("  (no texture)");
+                }
+
+                if (layer.alpha() < 1.0f) {
+                    layerLabel.append(String.format("  Alpha=%.2f", layer.alpha()));
+                }
+                if (layer.textureAnimId() >= 0) {
+                    layerLabel.append("  TexAnim=").append(layer.textureAnimId());
+                }
+
+                // Layer flags
+                List<String> flags = new java.util.ArrayList<>();
+                if (layer.isUnshaded())    flags.add("Unshaded");
+                if (layer.isTwoSided())    flags.add("TwoSided");
+                if (layer.isUnfogged())    flags.add("Unfogged");
+                if (layer.isNoDepthTest()) flags.add("NoDepthTest");
+                if (layer.isNoDepthSet())  flags.add("NoDepthSet");
+                if (!flags.isEmpty()) layerLabel.append("  {").append(String.join(", ", flags)).append("}");
+
+                matNode.add(new DefaultMutableTreeNode(layerLabel.toString()));
+            }
+            root.add(matNode);
+        }
+
+        JTree tree = new JTree(new DefaultTreeModel(root));
+        tree.setRootVisible(false);
+        tree.setShowsRootHandles(true);
+
+        // Custom renderer with color hints
+        tree.setCellRenderer(new DefaultTreeCellRenderer() {
+            @Override
+            public Component getTreeCellRendererComponent(JTree tree, Object value,
+                    boolean sel, boolean expanded, boolean leaf, int row, boolean hasFocus) {
+                super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus);
+                String text = value.toString();
+                if (!sel) {
+                    if (text.startsWith("Material ")) {
+                        setForeground(new Color(40, 80, 160));
+                    } else if (text.startsWith("Layer ")) {
+                        if (text.contains("TeamColor")) setForeground(new Color(180, 40, 40));
+                        else if (text.contains("TeamGlow")) setForeground(new Color(200, 140, 0));
+                        else if (text.contains("Additive") || text.contains("AddAlpha"))
+                            setForeground(new Color(0, 130, 80));
+                    }
+                }
+                return this;
+            }
+        });
+
+        // Expand all
+        for (int i = 0; i < tree.getRowCount(); i++) tree.expandRow(i);
+
+        JScrollPane scroll = new JScrollPane(tree);
+        scroll.getVerticalScrollBar().setUnitIncrement(12);
+        panel.add(scroll, BorderLayout.CENTER);
+        return panel;
+    }
+
+    // ── Geosets tab ─────────────────────────────────────────────────────
+
+    private JPanel buildGeosetsTab() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(new EmptyBorder(8, 8, 8, 8));
+
+        JLabel header = new JLabel("Geosets");
         header.setFont(header.getFont().deriveFont(Font.BOLD));
         header.setBorder(new EmptyBorder(0, 0, 6, 0));
         panel.add(header, BorderLayout.NORTH);
@@ -620,6 +746,7 @@ public final class ModelViewerDialog extends JDialog {
 
             StringBuilder detail = new StringBuilder();
             detail.append("Verts: ").append(fmt.format(vc));
+            if (skin.materialId() >= 0) detail.append("  Mat: ").append(skin.materialId());
             detail.append("  Filter: ").append(filterModeName(texData[gi].filterMode()));
             if (replStr != null) detail.append("  Repl: ").append(replStr);
             if (skin.hasSkinning()) detail.append("  Skinned");

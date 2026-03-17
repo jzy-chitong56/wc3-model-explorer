@@ -82,7 +82,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private int meshVao = 0, meshVbo = 0, meshEbo = 0, meshIndexCount = 0;
 
     // Per-geoset arrays for Textured mode (one entry per mesh-included geoset)
-    private int[] geoVao, geoVbo, geoUvVbo, geoEbo, geoIndexCount, geoTex, geoVertCount;
+    private int[] geoVao, geoVbo, geoUvVbo, geoEbo, geoIndexCount, geoVertCount;
+    private int[][] geoTex;       // [geosetIdx][layerIdx] — one texture per material layer
+    private int[][] geoLayerUvVbo; // [geosetIdx][layerIdx] — UV VBO per layer (0 = use geoUvVbo)
     private int[][] geoIndices; // cached index data per geoset (for highlight picking)
     private int highlightEbo = 0; // reusable EBO for bone highlight overlay
 
@@ -723,34 +725,26 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glUniformMatrix4fv(mvpLoc, false, mvp);
         glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
 
-        // Pass 1: opaque (NONE + TRANSPARENT)
+        // Pass 1: opaque layers
         for (int gi = 0; gi < geoVao.length; gi++) {
             if (geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
-            if (gi < texData.length && !texData[gi].isOpaque()) continue;
-            float alpha = geosetAlpha(gi);
-            if (alpha <= 0f) continue; // fully invisible
+            float geoAlpha = geosetAlpha(gi);
+            if (geoAlpha <= 0f) continue;
             setUVTransformUniform(uvTransformLoc, gi);
             setGeosetColorUniform(geosetColorLoc, gi);
-            drawGeoset(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, alpha);
+            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha, true);
         }
 
-        // Pass 2: transparent (BLEND, ADDITIVE, ADDALPHA, MODULATE, MODULATE2X)
+        // Pass 2: transparent layers
         glEnable(GL_BLEND);
         glDepthMask(false);
         for (int gi = 0; gi < geoVao.length; gi++) {
             if (geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
-            if (gi >= texData.length || texData[gi].isOpaque()) continue;
-            float alpha = geosetAlpha(gi);
-            if (alpha <= 0f) continue;
-            // Team glow always uses additive blending
-            if (texData[gi].replaceableId() == 2) {
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-            } else {
-                applyBlendMode(texData[gi].filterMode());
-            }
+            float geoAlpha = geosetAlpha(gi);
+            if (geoAlpha <= 0f) continue;
             setUVTransformUniform(uvTransformLoc, gi);
             setGeosetColorUniform(geosetColorLoc, gi);
-            drawGeoset(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, alpha);
+            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha, false);
         }
         glDepthMask(true);
         glDisable(GL_BLEND);
@@ -785,17 +779,77 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 ? geosetAlphaValues[gi] : 1.0f;
     }
 
-    private void drawGeoset(int gi, int samplerLoc, int hasTexLoc, int alphaThreshLoc,
-                             int alphaLoc, float alpha) {
-        boolean hasTex = geoTex != null && gi < geoTex.length && geoTex[gi] != 0;
+    /**
+     * Draws all layers of a geoset matching the requested pass (opaque or transparent).
+     * @param opaquePass true = draw opaque layers only, false = draw transparent layers only
+     */
+    private void drawGeosetLayers(int gi, int samplerLoc, int hasTexLoc, int alphaThreshLoc,
+                                   int alphaLoc, float geoAlpha, boolean opaquePass) {
+        if (geoTex == null || gi >= geoTex.length || geoTex[gi] == null) return;
+        var layers = (gi < texData.length) ? texData[gi].layers() : java.util.List.<GeosetTexData.LayerTexData>of();
+        int layerCount = geoTex[gi].length;
+
+        // If no multi-layer data, use legacy single-layer path
+        if (layers.isEmpty()) {
+            boolean isOpaque = (gi < texData.length) ? texData[gi].isOpaque() : true;
+            if (opaquePass != isOpaque) return;
+            if (!opaquePass) applyBlendMode(texData[gi].filterMode());
+            drawSingleLayer(gi, 0, texData[gi].filterMode(), 1.0f, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha);
+            return;
+        }
+
+        glBindVertexArray(geoVao[gi]);
+        for (int li = 0; li < Math.min(layerCount, layers.size()); li++) {
+            var layer = layers.get(li);
+            boolean layerOpaque = layer.isOpaque();
+            if (opaquePass != layerOpaque) continue;
+
+            if (!opaquePass) {
+                if (layer.replaceableId() == 2) {
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+                } else {
+                    applyBlendMode(layer.filterMode());
+                }
+            }
+
+            // Two-sided flag per layer
+            boolean twoSided = layer.isTwoSided();
+            if (twoSided) glDisable(GL_CULL_FACE);
+
+            // Swap UV VBO if this layer uses a different coord set
+            if (geoLayerUvVbo != null && gi < geoLayerUvVbo.length
+                    && geoLayerUvVbo[gi] != null && li < geoLayerUvVbo[gi].length
+                    && geoLayerUvVbo[gi][li] != 0) {
+                glBindBuffer(GL_ARRAY_BUFFER, geoLayerUvVbo[gi][li]);
+                glVertexAttribPointer(1, 2, GL_FLOAT, false, 8, 0L);
+                glEnableVertexAttribArray(1);
+            }
+
+            drawSingleLayer(gi, li, layer.filterMode(), layer.alpha(), samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha);
+
+            // Restore default UV VBO if we swapped
+            if (geoLayerUvVbo != null && gi < geoLayerUvVbo.length
+                    && geoLayerUvVbo[gi] != null && li < geoLayerUvVbo[gi].length
+                    && geoLayerUvVbo[gi][li] != 0 && geoUvVbo[gi] != 0) {
+                glBindBuffer(GL_ARRAY_BUFFER, geoUvVbo[gi]);
+                glVertexAttribPointer(1, 2, GL_FLOAT, false, 8, 0L);
+            }
+
+            if (twoSided) glEnable(GL_CULL_FACE);
+        }
+    }
+
+    private void drawSingleLayer(int gi, int li, int filterMode, float layerAlpha,
+                                  int samplerLoc, int hasTexLoc, int alphaThreshLoc,
+                                  int alphaLoc, float geoAlpha) {
+        boolean hasTex = geoTex[gi] != null && li < geoTex[gi].length && geoTex[gi][li] != 0;
         glUniform1i(hasTexLoc, hasTex ? 1 : 0);
-        // Alpha threshold: 0.75 for TRANSPARENT, 0 for everything else
-        float threshold = (gi < texData.length && texData[gi].filterMode() == 1) ? 0.75f : 0.0f;
+        float threshold = (filterMode == 1) ? 0.75f : 0.0f;
         glUniform1f(alphaThreshLoc, threshold);
-        glUniform1f(alphaLoc, alpha);
+        glUniform1f(alphaLoc, geoAlpha * layerAlpha);
         if (hasTex) {
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, geoTex[gi]);
+            glBindTexture(GL_TEXTURE_2D, geoTex[gi][li]);
             glUniform1i(samplerLoc, 0);
         }
         glBindVertexArray(geoVao[gi]);
@@ -1364,7 +1418,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         geoUvVbo     = new int[geoCount];
         geoEbo       = new int[geoCount];
         geoIndexCount= new int[geoCount];
-        geoTex       = new int[geoCount];
+        geoTex       = new int[geoCount][];
+        geoLayerUvVbo = new int[geoCount][];
         geoVertCount = new int[geoCount];
         geoIndices   = new int[geoCount][];
 
@@ -1419,23 +1474,30 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices, GL_STATIC_DRAW);
                 glBindVertexArray(0);
 
-                String texPath = texData[gi].texturePath();
-                int replId = texData[gi].replaceableId();
-                if (replId == 1 && !texPath.isEmpty()) {
-                    // Team color + base texture: composite TC under base
-                    geoTex[gi] = loadTeamColorTexture(texPath, teamColorIdx);
-                } else if (replId == 1) {
-                    // Team color only (no base): solid TC color texture
-                    geoTex[gi] = createSolidColorTexture(TEAM_COLORS[teamColorIdx]);
-                } else if (replId == 2) {
-                    // Team glow: try loading glow texture, fallback to base
-                    String glowPath = replaceableTexturePath(2, teamColorIdx);
-                    geoTex[gi] = loadGlTexture(glowPath);
-                    if (geoTex[gi] == 0 && !texPath.isEmpty()) {
-                        geoTex[gi] = loadGlTexture(texPath);
+                // Load textures for all material layers
+                var layers = texData[gi].layers();
+                if (!layers.isEmpty()) {
+                    geoTex[gi] = new int[layers.size()];
+                    geoLayerUvVbo[gi] = new int[layers.size()];
+                    for (int li = 0; li < layers.size(); li++) {
+                        var layer = layers.get(li);
+                        geoTex[gi][li] = loadLayerTexture(layer.texturePath(), layer.replaceableId(), teamColorIdx);
+                        // If layer uses a different UV set, create a separate UV VBO
+                        int coordId = layer.coordId();
+                        if (coordId > 0 && texData[gi].uvSets().length > coordId) {
+                            float[] layerUvs = texData[gi].uvSets()[coordId];
+                            if (layerUvs != null && layerUvs.length > 0) {
+                                geoLayerUvVbo[gi][li] = glGenBuffers();
+                                glBindBuffer(GL_ARRAY_BUFFER, geoLayerUvVbo[gi][li]);
+                                glBufferData(GL_ARRAY_BUFFER, layerUvs, GL_STATIC_DRAW);
+                            }
+                        }
                     }
-                } else if (!texPath.isEmpty()) {
-                    geoTex[gi] = loadGlTexture(texPath);
+                } else {
+                    // Fallback for legacy single-layer path
+                    geoTex[gi] = new int[1];
+                    geoLayerUvVbo[gi] = new int[1];
+                    geoTex[gi][0] = loadLayerTexture(texData[gi].texturePath(), texData[gi].replaceableId(), teamColorIdx);
                 }
 
                 indexOffset += faceCount;
@@ -1460,6 +1522,23 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         {  0,  97,  31}, // 10 Dark Green
         { 78,  42,   4}, // 11 Brown
     };
+
+    /** Loads a GL texture for a material layer (handles team color/glow/normal). */
+    private int loadLayerTexture(String texPath, int replId, int tc) {
+        if (replId == 1 && !texPath.isEmpty()) {
+            return loadTeamColorTexture(texPath, tc);
+        } else if (replId == 1) {
+            return createSolidColorTexture(TEAM_COLORS[tc]);
+        } else if (replId == 2) {
+            String glowPath = replaceableTexturePath(2, tc);
+            int tex = loadGlTexture(glowPath);
+            if (tex == 0 && !texPath.isEmpty()) tex = loadGlTexture(texPath);
+            return tex;
+        } else if (!texPath.isEmpty()) {
+            return loadGlTexture(texPath);
+        }
+        return 0;
+    }
 
     private static String replaceableTexturePath(int replaceableId, int teamColorIdx) {
         String idx = String.format("%02d", teamColorIdx);
@@ -1520,21 +1599,21 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private void reloadTeamColorTextures() {
         int tc = teamColorIdx;
         for (int gi = 0; gi < texData.length; gi++) {
-            if (!texData[gi].hasTeamColor()) continue;
             if (gi >= geoTex.length) break;
-            // Delete old texture
-            if (geoTex[gi] != 0) { glDeleteTextures(geoTex[gi]); geoTex[gi] = 0; }
-            int replId = texData[gi].replaceableId();
-            String texPath = texData[gi].texturePath();
-            if (replId == 1 && !texPath.isEmpty()) {
-                geoTex[gi] = loadTeamColorTexture(texPath, tc);
-            } else if (replId == 1) {
-                geoTex[gi] = createSolidColorTexture(TEAM_COLORS[tc]);
-            } else if (replId == 2) {
-                String glowPath = replaceableTexturePath(2, tc);
-                geoTex[gi] = loadGlTexture(glowPath);
-                if (geoTex[gi] == 0 && !texPath.isEmpty()) {
-                    geoTex[gi] = loadGlTexture(texPath);
+            var layers = texData[gi].layers();
+            if (layers.isEmpty()) {
+                // Legacy single-layer: reload if team color
+                if (!texData[gi].hasTeamColor()) continue;
+                if (geoTex[gi].length > 0 && geoTex[gi][0] != 0) {
+                    glDeleteTextures(geoTex[gi][0]); geoTex[gi][0] = 0;
+                }
+                geoTex[gi][0] = loadLayerTexture(texData[gi].texturePath(), texData[gi].replaceableId(), tc);
+            } else {
+                for (int li = 0; li < layers.size(); li++) {
+                    var layer = layers.get(li);
+                    if (layer.replaceableId() != 1 && layer.replaceableId() != 2) continue;
+                    if (geoTex[gi][li] != 0) { glDeleteTextures(geoTex[gi][li]); geoTex[gi][li] = 0; }
+                    geoTex[gi][li] = loadLayerTexture(layer.texturePath(), layer.replaceableId(), tc);
                 }
             }
         }
