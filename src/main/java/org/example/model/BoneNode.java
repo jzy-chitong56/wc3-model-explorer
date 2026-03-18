@@ -16,8 +16,8 @@ public record BoneNode(
 
     // Billboard flag masks from MdlxGenericObject
     public static final int FLAG_DONT_INHERIT_TRANSLATION = 0x1;
-    public static final int FLAG_DONT_INHERIT_ROTATION    = 0x2;
-    public static final int FLAG_DONT_INHERIT_SCALING     = 0x4;
+    public static final int FLAG_DONT_INHERIT_SCALING     = 0x2;
+    public static final int FLAG_DONT_INHERIT_ROTATION    = 0x4;
     public static final int FLAG_BILLBOARDED        = 0x8;
     public static final int FLAG_BILLBOARDED_LOCK_X = 0x10;
     public static final int FLAG_BILLBOARDED_LOCK_Y = 0x20;

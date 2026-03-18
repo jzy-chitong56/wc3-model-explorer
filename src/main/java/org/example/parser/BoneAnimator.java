@@ -53,13 +53,12 @@ public final class BoneAnimator {
 
         Map<Integer, float[]> worldMatrices = new HashMap<>(bones.length * 2);
         Map<Integer, float[]> worldRotations = new HashMap<>(bones.length * 2);
-        Map<Integer, float[]> worldTranslations = new HashMap<>(bones.length * 2);
         Map<Integer, float[]> worldScales = new HashMap<>(bones.length * 2);
         Map<Integer, BoneNode> byId = new HashMap<>(bones.length * 2);
         for (BoneNode b : bones) byId.put(b.objectId(), b);
 
         for (BoneNode bone : bones) {
-            computeWorldMatrix(bone, byId, worldMatrices, worldRotations, worldTranslations, worldScales,
+            computeWorldMatrix(bone, byId, worldMatrices, worldRotations, worldScales,
                     timeMs, seqStart, seqEnd, globalSequences, cameraRotation);
         }
         return worldMatrices;
@@ -72,7 +71,6 @@ public final class BoneAnimator {
             Map<Integer, BoneNode> byId,
             Map<Integer, float[]> matCache,
             Map<Integer, float[]> rotCache,
-            Map<Integer, float[]> translationCache,
             Map<Integer, float[]> scaleCache,
             long t, long s0, long s1, long[] globalSequences,
             float[] cameraRotation) {
@@ -81,19 +79,17 @@ public final class BoneAnimator {
             return matCache.get(bone.objectId());
         }
 
-        // Get parent world matrix and world rotation
+        // Get parent world matrix, rotation, and scale
         float[] parentWorldMatrix = IDENTITY;
         float[] parentWorldRot = IDENTITY_QUAT;
-        float[] parentWorldTranslation = ZERO_VEC3;
         float[] parentWorldScale = ONE_VEC3;
         if (bone.parentId() >= 0) {
             BoneNode parent = byId.get(bone.parentId());
             if (parent != null) {
-                computeWorldMatrix(parent, byId, matCache, rotCache, translationCache, scaleCache,
+                computeWorldMatrix(parent, byId, matCache, rotCache, scaleCache,
                         t, s0, s1, globalSequences, cameraRotation);
                 parentWorldMatrix = matCache.getOrDefault(parent.objectId(), IDENTITY);
                 parentWorldRot = rotCache.getOrDefault(parent.objectId(), IDENTITY_QUAT);
-                parentWorldTranslation = translationCache.getOrDefault(parent.objectId(), ZERO_VEC3);
                 parentWorldScale = scaleCache.getOrDefault(parent.objectId(), ONE_VEC3);
             }
         }
@@ -107,70 +103,69 @@ public final class BoneAnimator {
         float[] tr = interpTrackVec3(bone.trans(), t, s0, s1, globalSequences, 0f, 0f, 0f);
         float[] localRot = interpTrackQuat(bone.rot(), t, s0, s1, globalSequences);
         float[] sc = interpTrackVec3(bone.scale(), t, s0, s1, globalSequences, 1f, 1f, 1f);
-        float[] parentRotForChild = bone.inheritsRotation() ? parentWorldRot : IDENTITY_QUAT;
-        float[] parentScaleForChild = bone.inheritsScaling() ? parentWorldScale : ONE_VEC3;
 
-        // Billboard handling: orient the bone to face the camera
+        // Inheritance cancellation (Retera convention):
+        // Instead of decomposing the parent matrix, we always multiply
+        // parentWorldMatrix × localMatrix, but modify localRot/localScale
+        // to cancel the parent's contribution when DontInherit flags are set.
         float[] computedRot;
+        float[] computedScale;
         int flags = bone.flags();
+
+        // --- Rotation ---
         if (bone.isBillboarded() && cameraRotation != null) {
-            // Camera-facing billboard: replace rotation with camera orientation
-            // relative to the parent's world rotation
-            computedRot = computeBillboardRotation(flags, cameraRotation, parentRotForChild, localRot);
+            computedRot = computeBillboardRotation(flags, cameraRotation, parentWorldRot, localRot);
         } else if (bone.isBillboarded()) {
-            // Fallback without camera info: cancel parent rotation
-            computedRot = quatMul(quatInverse(parentRotForChild), localRot);
+            computedRot = quatMul(quatInverse(parentWorldRot), localRot);
+        } else if (!bone.inheritsRotation()) {
+            // DontInheritRotation: cancel parent rotation so local rot is in world space
+            computedRot = quatMul(quatInverse(parentWorldRot), localRot);
         } else {
             computedRot = localRot;
         }
 
-        // boneLocal = T(pivot+trans) × R(computedRot) × S × T(-pivot)
+        // --- Scale ---
+        if (!bone.inheritsScaling()) {
+            // DontInheritScaling: cancel parent scale so local scale is absolute
+            computedScale = new float[]{
+                    parentWorldScale[0] != 0f ? sc[0] / parentWorldScale[0] : sc[0],
+                    parentWorldScale[1] != 0f ? sc[1] / parentWorldScale[1] : sc[1],
+                    parentWorldScale[2] != 0f ? sc[2] / parentWorldScale[2] : sc[2]
+            };
+        } else {
+            computedScale = sc;
+        }
+
+        // boneLocal = T(pivot+trans) × R(computedRot) × S(computedScale) × T(-pivot)
         float[] localMatrix = makeTranslate(-px, -py, -pz);
-        localMatrix = matMul(makeScale(sc[0], sc[1], sc[2]), localMatrix);
+        localMatrix = matMul(makeScale(computedScale[0], computedScale[1], computedScale[2]), localMatrix);
         localMatrix = matMul(quatToMatrix(computedRot[0], computedRot[1], computedRot[2], computedRot[3]), localMatrix);
         localMatrix = matMul(makeTranslate(tr[0] + px, tr[1] + py, tr[2] + pz), localMatrix);
 
-        float[] effectiveParentMatrix = buildEffectiveParentMatrix(
-                bone, parentWorldMatrix, parentWorldTranslation, parentRotForChild, parentScaleForChild);
-
-        // worldMatrix = effectiveParentMatrix × localMatrix
-        float[] worldMatrix = matMul(effectiveParentMatrix, localMatrix);
+        // worldMatrix = parentWorldMatrix × localMatrix (always — no decomposition)
+        float[] worldMatrix = matMul(parentWorldMatrix, localMatrix);
         matCache.put(bone.objectId(), worldMatrix);
-        translationCache.put(bone.objectId(), extractTranslation(worldMatrix));
 
         // Track world rotation for children
         float[] worldRot;
-        if (bone.isBillboarded()) {
-            // Billboard: world rotation is the billboard rotation (not accumulated from parent)
-            worldRot = quatMul(parentRotForChild, computedRot);
+        if (bone.isBillboarded() || !bone.inheritsRotation()) {
+            // Billboard / DontInheritRotation: world rotation is just local rotation
+            worldRot = localRot;
         } else {
-            worldRot = quatMul(parentRotForChild, localRot);
+            worldRot = quatMul(parentWorldRot, localRot);
         }
         rotCache.put(bone.objectId(), worldRot);
-        scaleCache.put(bone.objectId(), mulVec3(parentScaleForChild, sc));
+
+        // Track world scale for children
+        float[] worldScale;
+        if (!bone.inheritsScaling()) {
+            worldScale = sc; // DontInheritScaling: world scale is just local scale
+        } else {
+            worldScale = mulVec3(parentWorldScale, sc);
+        }
+        scaleCache.put(bone.objectId(), worldScale);
 
         return worldMatrix;
-    }
-
-    private static float[] buildEffectiveParentMatrix(BoneNode bone,
-                                                      float[] parentWorldMatrix,
-                                                      float[] parentWorldTranslation,
-                                                      float[] parentRotForChild,
-                                                      float[] parentScaleForChild) {
-        if (bone.inheritsTranslation() && bone.inheritsRotation() && bone.inheritsScaling()) {
-            return parentWorldMatrix;
-        }
-        float[] m = identity();
-        if (bone.inheritsScaling()) {
-            m = matMul(makeScale(parentScaleForChild[0], parentScaleForChild[1], parentScaleForChild[2]), m);
-        }
-        if (bone.inheritsRotation()) {
-            m = matMul(quatToMatrix(parentRotForChild[0], parentRotForChild[1], parentRotForChild[2], parentRotForChild[3]), m);
-        }
-        if (bone.inheritsTranslation()) {
-            m = matMul(makeTranslate(parentWorldTranslation[0], parentWorldTranslation[1], parentWorldTranslation[2]), m);
-        }
-        return m;
     }
 
     /**
@@ -229,10 +224,6 @@ public final class BoneAnimator {
 
     private static float[] applyFullBillboardAxisCorrection(float[] billboardBase) {
         return quatMul(billboardBase, FULL_BILLBOARD_AXIS_CORRECTION);
-    }
-
-    private static float[] extractTranslation(float[] matrix) {
-        return new float[]{matrix[12], matrix[13], matrix[14]};
     }
 
     private static float[] mulVec3(float[] a, float[] b) {
