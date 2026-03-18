@@ -36,6 +36,8 @@ import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
 import java.awt.Image;
+import java.awt.RenderingHints;
+import java.awt.Shape;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.Transferable;
 import java.awt.datatransfer.UnsupportedFlavorException;
@@ -44,6 +46,7 @@ import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
+import java.awt.geom.RoundRectangle2D;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.InvalidPathException;
@@ -644,8 +647,8 @@ public final class MainWindow extends JFrame {
             selectedSize = ThumbnailSize.MEDIUM;
         }
         int cardSize = selectedSize.cardSize();
-        assetList.setFixedCellWidth(cardSize + 24);
-        assetList.setFixedCellHeight(cardSize + 54);
+        assetList.setFixedCellWidth(cardSize + 36);
+        assetList.setFixedCellHeight(cardSize + 78);
     }
 
     private void buildAdvancedFiltersPanel() {
@@ -737,29 +740,34 @@ public final class MainWindow extends JFrame {
     }
 
     private final class AssetCellRenderer extends DefaultListCellRenderer {
-        private final JPanel panel = new JPanel(new BorderLayout(4, 4));
+        private final CardPanel panel = new CardPanel();
         private final ShimmerPreviewLabel previewLabel = new ShimmerPreviewLabel();
         private final JLabel titleLabel = new JLabel();
         private final JLabel metaLabel = new JLabel();
 
         private AssetCellRenderer() {
-            panel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+            panel.setLayout(new BorderLayout(0, 8));
+            panel.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
 
             previewLabel.setOpaque(true);
-            previewLabel.setBackground(new Color(44, 49, 56));
-            previewLabel.setForeground(new Color(218, 223, 228));
+            previewLabel.setBackground(new Color(24, 28, 34));
+            previewLabel.setForeground(new Color(228, 233, 239));
             previewLabel.setFont(previewLabel.getFont().deriveFont(Font.BOLD, 14f));
             previewLabel.setPreferredSize(new Dimension(180, 180));
+            previewLabel.setHorizontalAlignment(JLabel.CENTER);
             panel.add(previewLabel, BorderLayout.CENTER);
 
-            titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 12f));
+            titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 12.5f));
+            titleLabel.setForeground(new Color(36, 42, 50));
 
             metaLabel.setFont(metaLabel.getFont().deriveFont(11f));
-            metaLabel.setForeground(new Color(120, 130, 140));
+            metaLabel.setForeground(new Color(104, 112, 124));
 
-            JPanel bottomPanel = new JPanel(new java.awt.GridLayout(2, 1));
+            JPanel bottomPanel = new JPanel();
+            bottomPanel.setLayout(new javax.swing.BoxLayout(bottomPanel, javax.swing.BoxLayout.Y_AXIS));
             bottomPanel.setOpaque(false);
             bottomPanel.add(titleLabel);
+            bottomPanel.add(javax.swing.Box.createVerticalStrut(2));
             bottomPanel.add(metaLabel);
             panel.add(bottomPanel, BorderLayout.SOUTH);
         }
@@ -773,9 +781,9 @@ public final class MainWindow extends JFrame {
                 boolean cellHasFocus
         ) {
             int cellWidth = list.getFixedCellWidth() > 0 ? list.getFixedCellWidth() : 216;
-            int previewSize = Math.max(64, cellWidth - 24);
+            int previewSize = Math.max(72, cellWidth - 56);
             previewLabel.setPreferredSize(new Dimension(previewSize, previewSize));
-            panel.setPreferredSize(new Dimension(cellWidth, previewSize + 44));
+            panel.setPreferredSize(new Dimension(cellWidth, previewSize + 82));
 
             if (value instanceof ModelAsset asset) {
                 NumberFormat format = NumberFormat.getIntegerInstance();
@@ -807,15 +815,7 @@ public final class MainWindow extends JFrame {
                         + "<font color='gray'>" + asset.path() + "</font></html>";
                 panel.setToolTipText(tooltip);
             }
-            if (isSelected) {
-                panel.setBackground(new Color(218, 234, 255));
-                panel.setOpaque(true);
-                panel.setBorder(BorderFactory.createLineBorder(new Color(106, 152, 255), 2));
-            } else {
-                panel.setBackground(list.getBackground());
-                panel.setOpaque(true);
-                panel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-            }
+            panel.setCardStyle(isSelected);
             return panel;
         }
 
@@ -843,7 +843,9 @@ public final class MainWindow extends JFrame {
         private static final Color SHIMMER_HIGHLIGHT = new Color(64, 69, 76);
         private static final Color LOADING_TEXT_COLOR = new Color(140, 150, 160);
         private static final Color SPINNER_COLOR = new Color(100, 140, 200);
-        private Image scaledThumb;
+        private static final Color PREVIEW_FRAME = new Color(255, 255, 255, 24);
+        private static final int IMAGE_OVERSCAN = 2;
+        private BufferedImage scaledThumb;
         private BufferedImage lastSource;
         private int lastSize;
 
@@ -853,30 +855,34 @@ public final class MainWindow extends JFrame {
                 if (thumb != lastSource || displaySize != lastSize) {
                     lastSource = thumb;
                     lastSize = displaySize;
-                    scaledThumb = thumb.getScaledInstance(displaySize, displaySize, Image.SCALE_SMOOTH);
+                    scaledThumb = scaleThumbnail(thumb, displaySize);
                 }
-                setIcon(new ImageIcon(scaledThumb));
             } else {
                 scaledThumb = null;
                 lastSource = null;
-                setIcon(null);
+                lastSize = displaySize;
             }
+            repaint();
         }
 
         @Override
         protected void paintComponent(Graphics g) {
+            int w = getWidth();
+            int h = getHeight();
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                    java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(getBackground());
+            g2.fillRoundRect(0, 0, w, h, 18, 18);
+
             if (scaledThumb == null) {
                 // Draw shimmer animation
-                int w = getWidth(), h = getHeight();
-                g.setColor(SHIMMER_BASE);
-                g.fillRect(0, 0, w, h);
-
-                // Animated highlight band sweeping left to right
                 float phase = (System.currentTimeMillis() % 1500) / 1500f;
                 int bandWidth = w / 3;
                 int bandX = (int) ((phase * (w + bandWidth)) - bandWidth);
 
-                Graphics2D g2 = (Graphics2D) g.create();
+                Shape clip = g2.getClip();
+                g2.clip(new RoundRectangle2D.Float(0, 0, w, h, 18, 18));
                 g2.setPaint(new GradientPaint(
                         bandX, 0, SHIMMER_BASE,
                         bandX + bandWidth / 2, 0, SHIMMER_HIGHLIGHT));
@@ -885,10 +891,9 @@ public final class MainWindow extends JFrame {
                         bandX + bandWidth / 2, 0, SHIMMER_HIGHLIGHT,
                         bandX + bandWidth, 0, SHIMMER_BASE));
                 g2.fillRect(bandX + bandWidth / 2, 0, bandWidth / 2, h);
+                g2.setClip(clip);
 
                 // Draw spinning arc
-                g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
-                        java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
                 int spinnerSize = Math.min(w, h) / 4;
                 int sx = (w - spinnerSize) / 2;
                 int sy = (h - spinnerSize) / 2 - 8;
@@ -906,14 +911,73 @@ public final class MainWindow extends JFrame {
                 int tx = (w - fm.stringWidth(loadText)) / 2;
                 int ty = sy + spinnerSize + fm.getHeight() + 4;
                 g2.drawString(loadText, tx, ty);
-
-                g2.dispose();
-
-                // Draw text (extension) on top of shimmer
-                super.paintComponent(g);
             } else {
-                super.paintComponent(g);
+                Shape clip = g2.getClip();
+                g2.clip(new RoundRectangle2D.Float(0, 0, w, h, 18, 18));
+                g2.drawImage(scaledThumb,
+                        -IMAGE_OVERSCAN, -IMAGE_OVERSCAN,
+                        w + IMAGE_OVERSCAN * 2, h + IMAGE_OVERSCAN * 2,
+                        null);
+                g2.setClip(clip);
             }
+            String text = getText();
+            if (text != null && !text.isBlank()) {
+                g2.setFont(getFont());
+                g2.setColor(getForeground());
+                java.awt.FontMetrics fm = g2.getFontMetrics();
+                int tx = (w - fm.stringWidth(text)) / 2;
+                int ty = h - 14;
+                g2.drawString(text, tx, ty);
+            }
+            g2.setColor(PREVIEW_FRAME);
+            g2.drawRoundRect(0, 0, w - 1, h - 1, 18, 18);
+            g2.dispose();
+        }
+
+        private static BufferedImage scaleThumbnail(BufferedImage thumb, int displaySize) {
+            BufferedImage scaled = new BufferedImage(displaySize, displaySize, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g2 = scaled.createGraphics();
+            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g2.drawImage(thumb, 0, 0, displaySize, displaySize, null);
+            g2.dispose();
+            return scaled;
+        }
+    }
+
+    private static final class CardPanel extends JPanel {
+        private static final int CARD_MARGIN = 6;
+        private Color fill = new Color(249, 250, 252);
+        private Color stroke = new Color(220, 225, 232);
+
+        private CardPanel() {
+            setOpaque(false);
+        }
+
+        void setCardStyle(boolean selected) {
+            if (selected) {
+                fill = new Color(231, 240, 255);
+                stroke = new Color(94, 146, 235);
+            } else {
+                fill = new Color(249, 250, 252);
+                stroke = new Color(220, 225, 232);
+            }
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                    java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(fill);
+            g2.fillRoundRect(CARD_MARGIN, CARD_MARGIN,
+                    getWidth() - CARD_MARGIN * 2, getHeight() - CARD_MARGIN * 2, 22, 22);
+            g2.setColor(stroke);
+            g2.drawRoundRect(CARD_MARGIN, CARD_MARGIN,
+                    getWidth() - CARD_MARGIN * 2 - 1, getHeight() - CARD_MARGIN * 2 - 1, 22, 22);
+            g2.dispose();
+            super.paintComponent(g);
         }
     }
 }
