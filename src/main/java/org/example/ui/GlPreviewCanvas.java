@@ -44,7 +44,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private float   pitchDegrees = 20.0f;
     private float   distance     = 300.0f;
     private float   panX         = 0.0f;
-    private float   panY         = -30.0f;
+    private float   panY         = 0.0f;
+    // Computed AABB center used for camera framing (Z-up model space)
+    private float   frameCenterX, frameCenterY, frameCenterZ;
     private boolean wireframe;
     private volatile boolean showExtent;
     private volatile boolean showBones;
@@ -1991,7 +1993,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         float[] m=buildCameraView();
         if(hasRenderableMesh()){
             m=rotateX(m,-90f); // WC3 Z-up → OpenGL Y-up
-            m=translate(m,-mesh.centerX(),-mesh.centerY(),-mesh.centerZ());
+            m=translate(m,-frameCenterX,-frameCenterY,-frameCenterZ);
             m=scale(m,modelScale);
         }
         return m;
@@ -2009,36 +2011,74 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         return mesh != null && !mesh.isEmpty()
             && Float.isFinite(mesh.radius()) && mesh.radius() > 0.0001f;
     }
+    /**
+     * Computes camera framing à la Retera's Model Studio:
+     * distance = boundsRadius * sqrt(2) * 2, target Z = boundsRadius / 2.
+     * Uses "Stand" sequence extents when available, falls back to vertex AABB.
+     */
     private void applyInitialCameraDistance() {
         if (hasRenderableMesh()) {
-            float r = computeVertexRadius();
-            modelScale = clamp(120f / r, 0.005f, 500f);
-            distance = 420f;
-            panY = -20f;
+            float boundsRadius = resolveInitialBoundsRadius();
+            frameCenterX = 0f;
+            frameCenterY = 0f;
+            frameCenterZ = boundsRadius * 0.5f; // look at half-height (Retera convention)
+            modelScale = clamp(120f / boundsRadius, 0.005f, 500f);
+            float scaledRadius = boundsRadius * modelScale;
+            distance = clamp(scaledRadius * (float) Math.sqrt(2) * 2f,
+                    MIN_DISTANCE, MAX_DISTANCE);
+            panX = 0f;
+            panY = 0f;
         } else {
-            modelScale = 1f; distance = 300f; panY = -30f;
+            modelScale = 1f; distance = 300f; panX = 0f; panY = 0f;
         }
     }
 
     /** Reframe the camera to fit the given sequence's bounding volume, resetting angles. */
     public void reframeToSequence(SequenceInfo seq) {
         if (!hasRenderableMesh()) return;
-        float r;
-        if (seq != null && seq.hasExtent() && seq.extentRadius() > 0.001f) {
-            r = Math.max(30f, seq.extentRadius());
+        float boundsRadius;
+        if (seq != null && seq.boundsRadius() > 1f) {
+            boundsRadius = seq.boundsRadius();
+        } else if (seq != null && seq.hasExtent() && seq.extentRadius() > 0.001f) {
+            boundsRadius = seq.extentRadius();
         } else {
-            r = computeVertexRadius();
+            boundsRadius = computeVertexBoundsRadius();
         }
-        modelScale = clamp(120f / r, 0.005f, 500f);
-        distance = 420f;
+        boundsRadius = clamp(boundsRadius, 0.1f, 10000f);
+        frameCenterX = 0f;
+        frameCenterY = 0f;
+        frameCenterZ = boundsRadius * 0.5f;
+        modelScale = clamp(120f / boundsRadius, 0.005f, 500f);
+        float scaledRadius = boundsRadius * modelScale;
+        distance = clamp(scaledRadius * (float) Math.sqrt(2) * 2f,
+                MIN_DISTANCE, MAX_DISTANCE);
         panX = 0f;
-        panY = -20f;
+        panY = 0f;
         yawDegrees = initialYaw;
         pitchDegrees = initialPitch;
     }
 
-    /** Compute bounding radius from actual vertex positions for tighter camera framing. */
-    private float computeVertexRadius() {
+    /**
+     * Resolve the initial bounds radius using Retera's priority:
+     * "Stand" sequence boundsRadius > "Stand" extent diagonal > vertex AABB > fallback 64.
+     */
+    private float resolveInitialBoundsRadius() {
+        // Try "Stand" animation extents first
+        if (animData != null && animData.sequences() != null) {
+            for (SequenceInfo seq : animData.sequences()) {
+                if (seq.name().toLowerCase(java.util.Locale.ROOT).contains("stand")) {
+                    if (seq.boundsRadius() > 1f) return seq.boundsRadius();
+                    if (seq.hasExtent() && seq.extentRadius() > 0.001f) return seq.extentRadius();
+                }
+            }
+        }
+        // Fall back to vertex AABB
+        float r = computeVertexBoundsRadius();
+        return r > 0.1f ? r : 64f;
+    }
+
+    /** Compute bounding radius from actual vertex positions. */
+    private float computeVertexBoundsRadius() {
         float[] verts = mesh.vertices();
         if (verts.length < 3) return Math.max(30f, mesh.radius());
         float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY, minZ = Float.POSITIVE_INFINITY;
@@ -2080,6 +2120,6 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         this.pitchDegrees = pitch;
     }
 
-    private void resetCamera(){yawDegrees=initialYaw;pitchDegrees=initialPitch;panX=0f;applyInitialCameraDistance();}
+    private void resetCamera(){yawDegrees=initialYaw;pitchDegrees=initialPitch;panX=0f;panY=0f;applyInitialCameraDistance();}
     static float clamp(float v,float lo,float hi){return Math.max(lo,Math.min(hi,v));}
 }

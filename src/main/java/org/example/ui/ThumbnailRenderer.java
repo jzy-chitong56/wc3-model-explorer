@@ -52,7 +52,6 @@ public final class ThumbnailRenderer {
     };
 
     // Camera defaults
-    private static final float DISTANCE = 420f, PAN_Y = -20f;
     private float cameraYaw = 200f;
     private float cameraPitch = 20f;
     private String animationName = "Stand";
@@ -455,19 +454,21 @@ public final class ThumbnailRenderer {
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LEQUAL);
 
-        // Use actual vertex bounds if we got any, otherwise fall back to mesh bounds
-        float cx, cy, cz, radius;
-        if (bMinX <= bMaxX) {
-            cx = (bMinX + bMaxX) * 0.5f;
-            cy = (bMinY + bMaxY) * 0.5f;
-            cz = (bMinZ + bMaxZ) * 0.5f;
+        // Compute bounds radius — prefer "Stand" sequence extents (Retera convention)
+        float boundsRadius;
+        if (thumbSeq != null && thumbSeq.boundsRadius() > 1f) {
+            boundsRadius = thumbSeq.boundsRadius();
+        } else if (thumbSeq != null && thumbSeq.hasExtent() && thumbSeq.extentRadius() > 0.001f) {
+            boundsRadius = thumbSeq.extentRadius();
+        } else if (bMinX <= bMaxX) {
             float dx = bMaxX - bMinX, dy = bMaxY - bMinY, dz = bMaxZ - bMinZ;
-            radius = (float) Math.sqrt(dx * dx + dy * dy + dz * dz) * 0.5f;
+            boundsRadius = (float) Math.sqrt(dx * dx + dy * dy + dz * dz) * 0.5f;
         } else {
-            cx = mesh.centerX(); cy = mesh.centerY(); cz = mesh.centerZ();
-            radius = mesh.radius();
+            boundsRadius = mesh.radius();
         }
-        float[] mvp = buildThumbnailMvp(cx, cy, cz, radius, cameraYaw, cameraPitch);
+        boundsRadius = Math.max(30f, Math.min(10000f, boundsRadius));
+        // Camera target at (0, 0, boundsRadius/2) — look at half-height
+        float[] mvp = buildThumbnailMvp(0f, 0f, boundsRadius * 0.5f, boundsRadius, cameraYaw, cameraPitch);
 
         glUseProgram(texShader);
         glUniformMatrix4fv(texMvpLoc, false, mvp);
@@ -604,15 +605,19 @@ public final class ThumbnailRenderer {
         glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
     }
 
-    private static float[] buildThumbnailMvp(float cx, float cy, float cz, float radius,
+    private static float[] buildThumbnailMvp(float cx, float cy, float cz, float boundsRadius,
                                                float yaw, float pitch) {
-        float r = Math.max(30f, radius);
+        float r = Math.max(30f, boundsRadius);
         float modelScale = GlPreviewCanvas.clamp(120f / r, 0.005f, 500f);
+
+        // Retera convention: distance = boundsRadius * sqrt(2) * 2
+        float scaledRadius = r * modelScale;
+        float distance = scaledRadius * (float) Math.sqrt(2) * 2f;
 
         float[] proj = GlPreviewCanvas.buildProjection(45f, 1f, 4f, 10000f);
 
         float[] mv = GlPreviewCanvas.identity();
-        mv = GlPreviewCanvas.translate(mv, 0f, PAN_Y, -DISTANCE);
+        mv = GlPreviewCanvas.translate(mv, 0f, 0f, -distance);
         mv = GlPreviewCanvas.rotateX(mv, pitch);
         mv = GlPreviewCanvas.rotateY(mv, yaw);
         mv = GlPreviewCanvas.rotateX(mv, -90f); // Z-up -> Y-up
