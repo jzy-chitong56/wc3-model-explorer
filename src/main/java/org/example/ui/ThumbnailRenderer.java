@@ -71,7 +71,7 @@ public final class ThumbnailRenderer {
 
     // GL resources (initialized once in paintGL on first call)
     private int fbo, fboColorTex, fboDepthRbo;
-    private int texShader, texMvpLoc, texSamplerLoc, texHasTexLoc, texAlphaThreshLoc, texAlphaLoc, texUVTransformLoc, texGeosetColorLoc;
+    private int texShader, texMvpLoc, texMvLoc, texSamplerLoc, texHasTexLoc, texAlphaThreshLoc, texAlphaLoc, texUVTransformLoc, texGeosetColorLoc, texUnshadedLoc;
     private boolean glInitialized;
 
     // Background color
@@ -226,12 +226,14 @@ public final class ThumbnailRenderer {
         texShader = GlPreviewCanvas.linkProgram(GlPreviewCanvas.TEX_VERT, GlPreviewCanvas.TEX_FRAG);
         if (texShader != 0) {
             texMvpLoc = glGetUniformLocation(texShader, "mvp");
+            texMvLoc = glGetUniformLocation(texShader, "uModelView");
             texSamplerLoc = glGetUniformLocation(texShader, "uTex");
             texHasTexLoc = glGetUniformLocation(texShader, "uHasTex");
             texAlphaThreshLoc = glGetUniformLocation(texShader, "uAlphaThreshold");
             texAlphaLoc = glGetUniformLocation(texShader, "uAlpha");
             texUVTransformLoc = glGetUniformLocation(texShader, "uUVTransform");
             texGeosetColorLoc = glGetUniformLocation(texShader, "uGeosetColor");
+            texUnshadedLoc = glGetUniformLocation(texShader, "uUnshaded");
         }
 
         fbo = glGenFramebuffers();
@@ -289,6 +291,7 @@ public final class ThumbnailRenderer {
         int geoCount = texData.length;
         int[] geoVao = new int[geoCount];
         int[] geoVbo = new int[geoCount];
+        int[] geoNormVbo = new int[geoCount];
         int[] geoUvVbo = new int[geoCount];
         int[] geoEbo = new int[geoCount];
         int[] geoIndexCount = new int[geoCount];
@@ -380,13 +383,21 @@ public final class ThumbnailRenderer {
                 float[] verts = new float[vc * 3];
                 System.arraycopy(mesh.vertices(), vertOffset * 3, verts, 0, vc * 3);
 
+                float[] norms = new float[vc * 3];
+                System.arraycopy(mesh.normals(), vertOffset * 3, norms, 0, vc * 3);
+
                 // Apply animation pose if bone matrices available
                 if (boneMatrices != null && skin.hasSkinning()) {
+                    float[] bindNormals = mesh.normals();
                     for (int vi = 0; vi < vc; vi++) {
                         float[] p = GlPreviewCanvas.transformVertex(skin, vi, boneMatrices);
                         verts[vi * 3] = p[0];
                         verts[vi * 3 + 1] = p[1];
                         verts[vi * 3 + 2] = p[2];
+                        float[] n = GlPreviewCanvas.transformNormal(skin, vi, vertOffset, bindNormals, boneMatrices);
+                        norms[vi * 3] = n[0];
+                        norms[vi * 3 + 1] = n[1];
+                        norms[vi * 3 + 2] = n[2];
                     }
                 }
 
@@ -406,6 +417,7 @@ public final class ThumbnailRenderer {
 
                 geoVao[gi] = glGenVertexArrays();
                 geoVbo[gi] = glGenBuffers();
+                geoNormVbo[gi] = glGenBuffers();
                 geoEbo[gi] = glGenBuffers();
                 geoIndexCount[gi] = faceCount;
 
@@ -414,6 +426,12 @@ public final class ThumbnailRenderer {
                 glBufferData(GL_ARRAY_BUFFER, verts, GL_STATIC_DRAW);
                 glVertexAttribPointer(0, 3, GL_FLOAT, false, 12, 0L);
                 glEnableVertexAttribArray(0);
+
+                // Per-vertex normals at location=2
+                glBindBuffer(GL_ARRAY_BUFFER, geoNormVbo[gi]);
+                glBufferData(GL_ARRAY_BUFFER, norms, GL_STATIC_DRAW);
+                glVertexAttribPointer(2, 3, GL_FLOAT, false, 12, 0L);
+                glEnableVertexAttribArray(2);
 
                 if (texData[gi].hasUvs()) {
                     geoUvVbo[gi] = glGenBuffers();
@@ -468,10 +486,13 @@ public final class ThumbnailRenderer {
         }
         boundsRadius = Math.max(30f, Math.min(10000f, boundsRadius));
         // Camera target at (0, 0, boundsRadius/2) — look at half-height
-        float[] mvp = buildThumbnailMvp(0f, 0f, boundsRadius * 0.5f, boundsRadius, cameraYaw, cameraPitch);
+        float[] mv = buildThumbnailModelView(0f, 0f, boundsRadius * 0.5f, boundsRadius, cameraYaw, cameraPitch);
+        float[] proj = GlPreviewCanvas.buildProjection(45f, 1f, 4f, 10000f);
+        float[] mvp = GlPreviewCanvas.matMul(proj, mv);
 
         glUseProgram(texShader);
         glUniformMatrix4fv(texMvpLoc, false, mvp);
+        if (texMvLoc >= 0) glUniformMatrix4fv(texMvLoc, false, mv);
 
         // Pass 1: opaque layers
         for (int i = 0; i < geoCount; i++) {
@@ -530,6 +551,7 @@ public final class ThumbnailRenderer {
         for (int i = 0; i < geoCount; i++) {
             if (geoVao[i] != 0) glDeleteVertexArrays(geoVao[i]);
             if (geoVbo[i] != 0) glDeleteBuffers(geoVbo[i]);
+            if (geoNormVbo[i] != 0) glDeleteBuffers(geoNormVbo[i]);
             if (geoUvVbo[i] != 0) glDeleteBuffers(geoUvVbo[i]);
             if (geoEbo[i] != 0) glDeleteBuffers(geoEbo[i]);
             if (geoTex[i] != null) {
@@ -569,6 +591,7 @@ public final class ThumbnailRenderer {
             boolean isOpaque = texData[gi].isOpaque();
             if (opaquePass != isOpaque) return;
             if (!opaquePass) GlPreviewCanvas.applyBlendMode(texData[gi].filterMode());
+            if (texUnshadedLoc >= 0) glUniform1i(texUnshadedLoc, 0);
             drawSingleLayer(gi, 0, texData[gi].filterMode(), 1.0f, geoVao, geoIndexCount, geoTex, geoAlpha);
             return;
         }
@@ -585,6 +608,7 @@ public final class ThumbnailRenderer {
                     GlPreviewCanvas.applyBlendMode(layer.filterMode());
                 }
             }
+            if (texUnshadedLoc >= 0) glUniform1i(texUnshadedLoc, layer.isUnshaded() ? 1 : 0);
             drawSingleLayer(gi, li, layer.filterMode(), layer.alpha(), geoVao, geoIndexCount, geoTex, geoAlpha);
         }
     }
@@ -605,16 +629,14 @@ public final class ThumbnailRenderer {
         glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
     }
 
-    private static float[] buildThumbnailMvp(float cx, float cy, float cz, float boundsRadius,
-                                               float yaw, float pitch) {
+    private static float[] buildThumbnailModelView(float cx, float cy, float cz, float boundsRadius,
+                                                     float yaw, float pitch) {
         float r = Math.max(30f, boundsRadius);
         float modelScale = GlPreviewCanvas.clamp(120f / r, 0.005f, 500f);
 
         // Retera convention: distance = boundsRadius * sqrt(2) * 2
         float scaledRadius = r * modelScale;
         float distance = scaledRadius * (float) Math.sqrt(2) * 2f;
-
-        float[] proj = GlPreviewCanvas.buildProjection(45f, 1f, 4f, 10000f);
 
         float[] mv = GlPreviewCanvas.identity();
         mv = GlPreviewCanvas.translate(mv, 0f, 0f, -distance);
@@ -623,8 +645,7 @@ public final class ThumbnailRenderer {
         mv = GlPreviewCanvas.rotateX(mv, -90f); // Z-up -> Y-up
         mv = GlPreviewCanvas.translate(mv, -cx, -cy, -cz);
         mv = GlPreviewCanvas.scale(mv, modelScale);
-
-        return GlPreviewCanvas.matMul(proj, mv);
+        return mv;
     }
 
     private static boolean hasKeysInRange(AnimTrack track, long start, long end) {

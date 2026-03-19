@@ -29,12 +29,14 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     public enum ShadingMode { SOLID, TEXTURED, LIT, NORMALS, GEOSET_COLORS }
 
-    private final ModelMesh         mesh;
-    private final ModelAnimData     animData;
-    private final GeosetTexData[]   texData;
-    private final CollisionShape[]  collisionShapes;
-    private final Path              modelDir;
-    private final Path              rootDir;
+    private final ModelMesh            mesh;
+    private final ModelAnimData        animData;
+    private final GeosetTexData[]      texData;
+    private final CollisionShape[]     collisionShapes;
+    private final RibbonEmitterData[]  ribbonEmitters;
+    private final MaterialInfo[]       materials;
+    private final Path                 modelDir;
+    private final Path                 rootDir;
     private volatile ShadingMode  shadingMode = ShadingMode.TEXTURED;
 
     private float   modelScale   = 1.0f;
@@ -74,17 +76,18 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     // GL resources (all initialised in initGL on the render thread)
     private int solidShader = 0, solidMvp = -1, solidColor = -1, solidAlpha = -1;
-    private int texShader   = 0, texMvp   = -1, texSampler = -1, texHasTex = -1, texAlphaThresh = -1, texAlphaU = -1, texUVTransform = -1, texGeosetColor = -1;
-    private int litShader   = 0, litMvp   = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1, litGeosetColor = -1;
-    private int normalsShader = 0, normalsMvp = -1;
+    private int texShader   = 0, texMvp   = -1, texMvLoc = -1, texSampler = -1, texHasTex = -1, texAlphaThresh = -1, texAlphaU = -1, texUVTransform = -1, texGeosetColor = -1, texUnshaded = -1;
+    private int litShader   = 0, litMvp   = -1, litMvLoc = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1, litGeosetColor = -1, litUnshaded = -1;
+    private int normalsShader = 0, normalsMvp = -1, normalsMvLoc = -1;
+    private int ribbonShader = 0, ribbonMvp = -1, ribbonSampler = -1, ribbonHasTex = -1, ribbonAlphaU = -1;
 
     private int gridVao = 0, gridVbo = 0, gridVertexCount = 0;
 
     // Combined VAO for Solid mode
-    private int meshVao = 0, meshVbo = 0, meshEbo = 0, meshIndexCount = 0;
+    private int meshVao = 0, meshVbo = 0, meshNormVbo = 0, meshEbo = 0, meshIndexCount = 0;
 
     // Per-geoset arrays for Textured mode (one entry per mesh-included geoset)
-    private int[] geoVao, geoVbo, geoUvVbo, geoEbo, geoIndexCount, geoVertCount;
+    private int[] geoVao, geoVbo, geoNormVbo, geoUvVbo, geoEbo, geoIndexCount, geoVertCount;
     private int[][] geoTex;       // [geosetIdx][layerIdx] — one texture per material layer
     private int[][] geoLayerUvVbo; // [geosetIdx][layerIdx] — UV VBO per layer (0 = use geoUvVbo)
     private int[][] geoIndices; // cached index data per geoset (for highlight picking)
@@ -106,10 +109,22 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile int     teamColorIdx = 0;
     private volatile boolean tcDirty      = false;
     private float[]          animatedVertices;
+    private float[]          animatedNormals;
+    private volatile boolean[] geosetVisibility; // per-geoset visibility toggle (null = all visible)
     private float[]          geosetAlphaValues; // per-geoset alpha (sampled from KGAO)
     private float[][]        geosetColorValues; // per-geoset RGB color (sampled from KGAC), null entries = white
     private float[][]        geosetUVTransforms; // per-geoset 4x4 UV transform matrices (null = identity)
     private volatile Map<Integer, float[]> lastWorldMap; // cached for node names overlay
+    private float lastDtSec; // delta time in seconds from last advanceAnimation()
+
+    // ── Ribbon emitter runtime state ────────────────────────────────────────
+    private RibbonState[] ribbonStates;     // one per ribbon emitter, null if no emitters
+    private int ribbonVao, ribbonVbo;       // dynamic VAO/VBO for ribbon geometry
+    private int[] ribbonTextures;           // GL texture per ribbon emitter (from material)
+    private int[] ribbonFilterModes;        // filter mode per ribbon emitter (from material layer)
+    private static final int RIBBON_MAX_VERTS = 60000; // max vertices across all ribbons
+    private static final int RIBBON_FLOATS_PER_VERT = 8; // x,y,z, u,v, r,g,b
+
     // Node names GL overlay (rendered as textured fullscreen quad)
     private int nodeNamesQuadVao, nodeNamesQuadVbo, nodeNamesTex;
     private int nodeNamesTexW, nodeNamesTexH;
@@ -135,90 +150,143 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "#version 330 core\n" +
         "layout(location=0) in vec3 aPos;\n" +
         "layout(location=1) in vec2 aUV;\n" +
+        "layout(location=2) in vec3 aNormal;\n" +
         "uniform mat4 mvp;\n" +
+        "uniform mat4 uModelView;\n" +
         "uniform mat4 uUVTransform;\n" +
         "out vec2 vUV;\n" +
+        "out vec3 vViewNormal;\n" +
+        "out vec3 vWorldPos;\n" +
         // WC3 UV: V=0 is top; OpenGL: V=0 is bottom → flip V
         "void main(){\n" +
         "  gl_Position = mvp * vec4(aPos,1.0);\n" +
         "  vec2 flipped = vec2(aUV.x, 1.0-aUV.y);\n" +
         "  vUV = (uUVTransform * vec4(flipped, 0.0, 1.0)).xy;\n" +
+        "  vViewNormal = mat3(uModelView) * aNormal;\n" +
+        "  vWorldPos = aPos;\n" +
         "}\n";
 
     static final String TEX_FRAG =
         "#version 330 core\n" +
         "in vec2 vUV;\n" +
+        "in vec3 vViewNormal;\n" +
+        "in vec3 vWorldPos;\n" +
         "uniform sampler2D uTex;\n" +
         "uniform bool uHasTex;\n" +
         "uniform float uAlphaThreshold;\n" +
         "uniform float uAlpha;\n" +
         "uniform vec3 uGeosetColor;\n" +
+        "uniform bool uUnshaded;\n" +
         "out vec4 fragColor;\n" +
         "void main(){\n" +
         "  vec4 c = uHasTex ? texture(uTex, vUV) : vec4(0.74,0.78,0.86,1.0);\n" +
+        "  if(!uUnshaded){\n" +
+        "    vec3 N = length(vViewNormal) > 0.001 ? normalize(vViewNormal) : normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
+        "    c.rgb *= (3.0 + dot(N, vec3(0.0, 0.0, 1.0))) / 4.0;\n" +
+        "  }\n" +
         "  c.rgb *= uGeosetColor;\n" +
         "  c.a *= uAlpha;\n" +
         "  if(c.a < uAlphaThreshold) discard;\n" +
         "  fragColor = c;\n" +
         "}\n";
 
-    // Lit shader: textured + simple directional light using flat normals from dFdx/dFdy
+    // Lit shader: textured + Retera-style view-space lighting
     static final String LIT_VERT =
         "#version 330 core\n" +
         "layout(location=0) in vec3 aPos;\n" +
         "layout(location=1) in vec2 aUV;\n" +
+        "layout(location=2) in vec3 aNormal;\n" +
         "uniform mat4 mvp;\n" +
+        "uniform mat4 uModelView;\n" +
         "uniform mat4 uUVTransform;\n" +
         "out vec2 vUV;\n" +
+        "out vec3 vViewNormal;\n" +
         "out vec3 vWorldPos;\n" +
         "void main(){\n" +
         "  gl_Position = mvp * vec4(aPos,1.0);\n" +
         "  vec2 flipped = vec2(aUV.x, 1.0-aUV.y);\n" +
         "  vUV = (uUVTransform * vec4(flipped, 0.0, 1.0)).xy;\n" +
+        "  vViewNormal = mat3(uModelView) * aNormal;\n" +
         "  vWorldPos = aPos;\n" +
         "}\n";
 
     static final String LIT_FRAG =
         "#version 330 core\n" +
         "in vec2 vUV;\n" +
+        "in vec3 vViewNormal;\n" +
         "in vec3 vWorldPos;\n" +
         "uniform sampler2D uTex;\n" +
         "uniform bool uHasTex;\n" +
         "uniform float uAlphaThreshold;\n" +
         "uniform float uAlpha;\n" +
         "uniform vec3 uGeosetColor;\n" +
+        "uniform bool uUnshaded;\n" +
         "out vec4 fragColor;\n" +
         "void main(){\n" +
-        "  vec3 N = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
-        "  vec3 L = normalize(vec3(0.3, 0.8, 0.5));\n" +  // front-right-top light
-        "  float diff = max(dot(N, L), 0.0);\n" +
-        "  float ambient = 0.35;\n" +
-        "  float light = ambient + (1.0 - ambient) * diff;\n" +
         "  vec4 base = uHasTex ? texture(uTex, vUV) : vec4(0.74,0.78,0.86,1.0);\n" +
+        "  float shadowThing = 1.0;\n" +
+        "  if(!uUnshaded){\n" +
+        "    vec3 N = length(vViewNormal) > 0.001 ? normalize(vViewNormal) : normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
+        "    shadowThing = (3.0 + dot(N, vec3(0.0, 0.0, 1.0))) / 4.0;\n" +
+        "  }\n" +
         "  base.rgb *= uGeosetColor;\n" +
         "  base.a *= uAlpha;\n" +
         "  if(base.a < uAlphaThreshold) discard;\n" +
-        "  fragColor = vec4(base.rgb * light, base.a);\n" +
+        "  fragColor = vec4(base.rgb * shadowThing, base.a);\n" +
         "}\n";
 
-    // Normals shader: visualises face normals as RGB colour (N*0.5+0.5)
+    // Normals shader: visualises vertex normals as RGB colour (N*0.5+0.5)
     static final String NORMALS_VERT =
         "#version 330 core\n" +
         "layout(location=0) in vec3 aPos;\n" +
+        "layout(location=2) in vec3 aNormal;\n" +
         "uniform mat4 mvp;\n" +
+        "uniform mat4 uModelView;\n" +
+        "out vec3 vViewNormal;\n" +
         "out vec3 vWorldPos;\n" +
         "void main(){\n" +
         "  gl_Position = mvp * vec4(aPos,1.0);\n" +
+        "  vViewNormal = mat3(uModelView) * aNormal;\n" +
         "  vWorldPos = aPos;\n" +
         "}\n";
 
     static final String NORMALS_FRAG =
         "#version 330 core\n" +
+        "in vec3 vViewNormal;\n" +
         "in vec3 vWorldPos;\n" +
         "out vec4 fragColor;\n" +
         "void main(){\n" +
-        "  vec3 N = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
+        "  vec3 N = length(vViewNormal) > 0.001 ? normalize(vViewNormal) : normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
         "  fragColor = vec4(N * 0.5 + 0.5, 1.0);\n" +
+        "}\n";
+
+    // Ribbon shader: position + UV + vertex color, textured with alpha blending
+    static final String RIBBON_VERT =
+        "#version 330 core\n" +
+        "layout(location=0) in vec3 aPos;\n" +
+        "layout(location=1) in vec2 aUV;\n" +
+        "layout(location=2) in vec3 aColor;\n" +
+        "uniform mat4 mvp;\n" +
+        "out vec2 vUV;\n" +
+        "out vec3 vColor;\n" +
+        "void main(){\n" +
+        "  gl_Position = mvp * vec4(aPos,1.0);\n" +
+        "  vUV = vec2(aUV.x, 1.0-aUV.y);\n" +
+        "  vColor = aColor;\n" +
+        "}\n";
+
+    static final String RIBBON_FRAG =
+        "#version 330 core\n" +
+        "in vec2 vUV;\n" +
+        "in vec3 vColor;\n" +
+        "uniform sampler2D tex;\n" +
+        "uniform bool uHasTex;\n" +
+        "uniform float uAlpha;\n" +
+        "out vec4 fragColor;\n" +
+        "void main(){\n" +
+        "  vec4 texel = uHasTex ? texture(tex, vUV) : vec4(1.0);\n" +
+        "  fragColor = vec4(texel.rgb * vColor, texel.a * uAlpha);\n" +
+        "  if (fragColor.a < 0.004) discard;\n" +
         "}\n";
 
     // ── Construction ─────────────────────────────────────────────────────────
@@ -232,27 +300,41 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
              parsed == null ? ModelAnimData.EMPTY  : parsed.animData(),
              parsed == null ? new GeosetTexData[0] : parsed.texData(),
              parsed == null ? CollisionShape.EMPTY_ARRAY : parsed.collisionShapes(),
+             parsed == null ? RibbonEmitterData.EMPTY_ARRAY : parsed.ribbonEmitters(),
+             parsed == null ? MaterialInfo.EMPTY_ARRAY : parsed.materials(),
              null, null);
     }
 
     public GlPreviewCanvas(ModelMesh mesh, ModelAnimData animData,
                            GeosetTexData[] texData, Path modelDir) {
-        this(mesh, animData, texData, CollisionShape.EMPTY_ARRAY, modelDir, null);
+        this(mesh, animData, texData, CollisionShape.EMPTY_ARRAY,
+                RibbonEmitterData.EMPTY_ARRAY, MaterialInfo.EMPTY_ARRAY, modelDir, null);
     }
 
     public GlPreviewCanvas(ModelMesh mesh, ModelAnimData animData,
                            GeosetTexData[] texData, Path modelDir, Path rootDir) {
-        this(mesh, animData, texData, CollisionShape.EMPTY_ARRAY, modelDir, rootDir);
+        this(mesh, animData, texData, CollisionShape.EMPTY_ARRAY,
+                RibbonEmitterData.EMPTY_ARRAY, MaterialInfo.EMPTY_ARRAY, modelDir, rootDir);
     }
 
     public GlPreviewCanvas(ModelMesh mesh, ModelAnimData animData,
                            GeosetTexData[] texData, CollisionShape[] collisionShapes,
+                           Path modelDir, Path rootDir) {
+        this(mesh, animData, texData, collisionShapes,
+                RibbonEmitterData.EMPTY_ARRAY, MaterialInfo.EMPTY_ARRAY, modelDir, rootDir);
+    }
+
+    public GlPreviewCanvas(ModelMesh mesh, ModelAnimData animData,
+                           GeosetTexData[] texData, CollisionShape[] collisionShapes,
+                           RibbonEmitterData[] ribbonEmitters, MaterialInfo[] materials,
                            Path modelDir, Path rootDir) {
         super(createGlData());
         this.mesh            = mesh            != null ? mesh            : ModelMesh.EMPTY;
         this.animData        = animData        != null ? animData        : ModelAnimData.EMPTY;
         this.texData         = texData         != null ? texData         : new GeosetTexData[0];
         this.collisionShapes = collisionShapes != null ? collisionShapes : CollisionShape.EMPTY_ARRAY;
+        this.ribbonEmitters  = ribbonEmitters  != null ? ribbonEmitters  : RibbonEmitterData.EMPTY_ARRAY;
+        this.materials       = materials       != null ? materials       : MaterialInfo.EMPTY_ARRAY;
         this.modelDir        = modelDir;
         this.rootDir         = rootDir;
         setFocusable(true);
@@ -316,7 +398,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         if (hasRenderableMesh()) {
             buildMeshVao();
             buildPerGeosetVaos();
-            if (animData.hasAnimation()) animatedVertices = mesh.vertices().clone();
+            if (animData.hasAnimation()) {
+                animatedVertices = mesh.vertices().clone();
+                animatedNormals  = mesh.normals().clone();
+            }
             // Initialize per-geoset alpha values (1.0 = fully opaque)
             geosetAlphaValues = new float[texData.length];
             java.util.Arrays.fill(geosetAlphaValues, 1.0f);
@@ -331,6 +416,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             buildCollisionVao();
             buildBoneVao();
             buildNodeCubeVao();
+            initRibbons();
         } else {
             buildCubeVao();
         }
@@ -344,7 +430,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         float[] proj = buildProjection(45f, (float)w/h, 4f, 10000f);
-        float[] modelMvp = matMul(proj, buildModelView());
+        float[] modelView = buildModelView();
+        float[] modelMvp = matMul(proj, modelView);
 
         // Set default alpha for solid shader (highlight pass changes this)
         if (solidShader != 0) {
@@ -381,10 +468,17 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 advanceAnimation();
                 if (animData.hasAnimation() && animatedVertices != null) {
                     uploadAnimatedVertices();
+                } else if (ribbonStates != null && animData.bones().length > 0) {
+                    // Compute world matrices for ribbon emitters even without mesh animation
+                    SequenceInfo seq = animData.sequences().get(currentSeqIdx);
+                    float[] cameraRot = computeCameraRotationQuat();
+                    lastWorldMap = BoneAnimator.computeWorldMatrices(
+                            animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), cameraRot);
                 }
                 sampleGeosetAlpha();
                 sampleGeosetColor();
                 sampleTextureAnims();
+                simulateRibbons(lastDtSec);
             } else {
                 // Even without a selected sequence, global texture animations should run
                 sampleTextureAnims();
@@ -392,13 +486,17 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             if (shadingMode == ShadingMode.GEOSET_COLORS && solidShader != 0 && geoVao != null) {
                 drawGeosetColors(modelMvp);
             } else if (shadingMode == ShadingMode.NORMALS && normalsShader != 0 && geoVao != null) {
-                drawNormals(modelMvp);
+                drawNormals(modelMvp, modelView);
             } else if (shadingMode == ShadingMode.LIT && litShader != 0 && geoVao != null) {
-                drawLit(modelMvp);
+                drawLit(modelMvp, modelView);
             } else if (shadingMode == ShadingMode.TEXTURED && texShader != 0 && geoVao != null) {
-                drawTextured(modelMvp);
+                drawTextured(modelMvp, modelView);
             } else if (solidShader != 0 && meshVao != 0) {
                 drawSolid(modelMvp);
+            }
+            // Ribbon emitters (drawn after geosets, before overlays)
+            if (ribbonStates != null && ribbonStates.length > 0) {
+                drawRibbons(modelMvp);
             }
             // Highlight overlays (bone hover from Nodes tab, geoset hover from Materials tab)
             if (geoVao != null && solidShader != 0) {
@@ -529,17 +627,18 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glUseProgram(0);
     }
 
-    private void drawTextured(float[] mvp) {
-        drawPerGeoset(mvp, texShader, texMvp, texSampler, texHasTex, texAlphaThresh, texAlphaU, texUVTransform, texGeosetColor);
+    private void drawTextured(float[] mvp, float[] mv) {
+        drawPerGeoset(mvp, mv, texShader, texMvp, texMvLoc, texSampler, texHasTex, texAlphaThresh, texAlphaU, texUVTransform, texGeosetColor, texUnshaded);
     }
 
-    private void drawLit(float[] mvp) {
-        drawPerGeoset(mvp, litShader, litMvp, litSampler, litHasTex, litAlphaThresh, litAlphaU, litUVTransform, litGeosetColor);
+    private void drawLit(float[] mvp, float[] mv) {
+        drawPerGeoset(mvp, mv, litShader, litMvp, litMvLoc, litSampler, litHasTex, litAlphaThresh, litAlphaU, litUVTransform, litGeosetColor, litUnshaded);
     }
 
-    private void drawNormals(float[] mvp) {
+    private void drawNormals(float[] mvp, float[] mv) {
         glUseProgram(normalsShader);
         glUniformMatrix4fv(normalsMvp, false, mvp);
+        if (normalsMvLoc >= 0) glUniformMatrix4fv(normalsMvLoc, false, mv);
         glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
         for (int gi = 0; gi < geoVao.length; gi++) {
             if (geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
@@ -721,20 +820,22 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1
     };
 
-    private void drawPerGeoset(float[] mvp, int shader, int mvpLoc, int samplerLoc,
-                                int hasTexLoc, int alphaThreshLoc, int alphaLoc, int uvTransformLoc, int geosetColorLoc) {
+    private void drawPerGeoset(float[] mvp, float[] mv, int shader, int mvpLoc, int mvLoc, int samplerLoc,
+                                int hasTexLoc, int alphaThreshLoc, int alphaLoc, int uvTransformLoc, int geosetColorLoc, int unshadedLoc) {
         glUseProgram(shader);
         glUniformMatrix4fv(mvpLoc, false, mvp);
+        if (mvLoc >= 0) glUniformMatrix4fv(mvLoc, false, mv);
         glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
 
         // Pass 1: opaque layers
         for (int gi = 0; gi < geoVao.length; gi++) {
             if (geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
+            if (!geosetVisible(gi)) continue;
             float geoAlpha = geosetAlpha(gi);
             if (geoAlpha <= 0f) continue;
             setUVTransformUniform(uvTransformLoc, gi);
             setGeosetColorUniform(geosetColorLoc, gi);
-            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha, true);
+            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, unshadedLoc, geoAlpha, true);
         }
 
         // Pass 2: transparent layers
@@ -742,11 +843,12 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glDepthMask(false);
         for (int gi = 0; gi < geoVao.length; gi++) {
             if (geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
+            if (!geosetVisible(gi)) continue;
             float geoAlpha = geosetAlpha(gi);
             if (geoAlpha <= 0f) continue;
             setUVTransformUniform(uvTransformLoc, gi);
             setGeosetColorUniform(geosetColorLoc, gi);
-            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha, false);
+            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, unshadedLoc, geoAlpha, false);
         }
         glDepthMask(true);
         glDisable(GL_BLEND);
@@ -781,12 +883,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 ? geosetAlphaValues[gi] : 1.0f;
     }
 
+    private boolean geosetVisible(int gi) {
+        return geosetVisibility == null || gi < 0 || gi >= geosetVisibility.length || geosetVisibility[gi];
+    }
+
     /**
      * Draws all layers of a geoset matching the requested pass (opaque or transparent).
      * @param opaquePass true = draw opaque layers only, false = draw transparent layers only
      */
     private void drawGeosetLayers(int gi, int samplerLoc, int hasTexLoc, int alphaThreshLoc,
-                                   int alphaLoc, float geoAlpha, boolean opaquePass) {
+                                   int alphaLoc, int unshadedLoc, float geoAlpha, boolean opaquePass) {
         if (geoTex == null || gi >= geoTex.length || geoTex[gi] == null) return;
         var layers = (gi < texData.length) ? texData[gi].layers() : java.util.List.<GeosetTexData.LayerTexData>of();
         int layerCount = geoTex[gi].length;
@@ -796,6 +902,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             boolean isOpaque = (gi < texData.length) ? texData[gi].isOpaque() : true;
             if (opaquePass != isOpaque) return;
             if (!opaquePass) applyBlendMode(texData[gi].filterMode());
+            if (unshadedLoc >= 0) glUniform1i(unshadedLoc, 0);
             drawSingleLayer(gi, 0, texData[gi].filterMode(), 1.0f, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha);
             return;
         }
@@ -817,6 +924,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             // Two-sided flag per layer
             boolean twoSided = layer.isTwoSided();
             if (twoSided) glDisable(GL_CULL_FACE);
+
+            // Unshaded flag per layer
+            if (unshadedLoc >= 0) glUniform1i(unshadedLoc, layer.isUnshaded() ? 1 : 0);
 
             // Swap UV VBO if this layer uses a different coord set
             if (geoLayerUvVbo != null && gi < geoLayerUvVbo.length
@@ -934,8 +1044,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     private void advanceAnimation() {
         long nowNs = System.nanoTime(), prev = lastNanoNs;
-        if (prev == 0L || !animPlaying) { lastNanoNs = nowNs; return; }
+        if (prev == 0L || !animPlaying) { lastNanoNs = nowNs; lastDtSec = 0f; return; }
         long deltaNs = nowNs - prev; lastNanoNs = nowNs;
+        lastDtSec = (float)(deltaNs / 1_000_000_000.0 * animSpeed);
         long deltaMs = (long)(deltaNs / 1_000_000.0 * animSpeed);
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
         long duration = seq.end() - seq.start();
@@ -1112,8 +1223,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         float[] cameraRot = computeCameraRotationQuat();
         Map<Integer, float[]> worldMap = BoneAnimator.computeWorldMatrices(
                 animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), cameraRot);
+        lastWorldMap = worldMap; // cache for ribbon simulation and node names overlay
 
-        // Update flat combined buffer
+        float[] bindNormals = mesh.normals();
+
+        // Update flat combined buffer (vertices + normals)
         int meshVertOffset = 0;
         for (GeosetSkinData skin : animData.geosets()) {
             int vc = skin.vertexCount(); if (vc == 0) continue;
@@ -1122,16 +1236,22 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                     float[] p = transformVertex(skin, vi, worldMap);
                     int base = (meshVertOffset + vi) * 3;
                     animatedVertices[base] = p[0]; animatedVertices[base+1] = p[1]; animatedVertices[base+2] = p[2];
+                    // Transform normal using upper-left 3x3 of averaged bone matrix
+                    float[] n = transformNormal(skin, vi, meshVertOffset, bindNormals, worldMap);
+                    animatedNormals[base] = n[0]; animatedNormals[base+1] = n[1]; animatedNormals[base+2] = n[2];
                 }
             } else {
                 System.arraycopy(skin.bindVertices(), 0, animatedVertices, meshVertOffset * 3, vc * 3);
+                System.arraycopy(bindNormals, meshVertOffset * 3, animatedNormals, meshVertOffset * 3, vc * 3);
             }
             meshVertOffset += vc;
         }
         glBindBuffer(GL_ARRAY_BUFFER, meshVbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0L, animatedVertices);
+        glBindBuffer(GL_ARRAY_BUFFER, meshNormVbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0L, animatedNormals);
 
-        // Update per-geoset position VBOs
+        // Update per-geoset position and normal VBOs
         if (geoVbo != null && geoVertCount != null) {
             int off = 0;
             for (int gi = 0; gi < geoVbo.length; gi++) {
@@ -1141,6 +1261,13 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                     System.arraycopy(animatedVertices, off * 3, slice, 0, vc * 3);
                     glBindBuffer(GL_ARRAY_BUFFER, geoVbo[gi]);
                     glBufferSubData(GL_ARRAY_BUFFER, 0L, slice);
+                    // Upload animated normals for this geoset
+                    if (geoNormVbo != null && geoNormVbo[gi] != 0) {
+                        float[] nSlice = new float[vc * 3];
+                        System.arraycopy(animatedNormals, off * 3, nSlice, 0, vc * 3);
+                        glBindBuffer(GL_ARRAY_BUFFER, geoNormVbo[gi]);
+                        glBufferSubData(GL_ARRAY_BUFFER, 0L, nSlice);
+                    }
                 }
                 off += vc;
             }
@@ -1165,6 +1292,29 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         };
     }
 
+    /** Transform a vertex normal using the upper-left 3x3 of the averaged bone matrix, then normalize. */
+    static float[] transformNormal(GeosetSkinData skin, int vi, int meshVertOffset,
+                                   float[] bindNormals, Map<Integer, float[]> wm) {
+        int nBase = (meshVertOffset + vi) * 3;
+        float nx = bindNormals[nBase], ny = bindNormals[nBase+1], nz = bindNormals[nBase+2];
+        int[] vg = skin.vertexGroup();
+        int gi = (vg != null && vi < vg.length) ? vg[vi] : 0;
+        int[][] g = skin.groupBoneObjectIds();
+        if (gi >= g.length || g[gi].length == 0) return new float[]{nx,ny,nz};
+        float[] avg = new float[16]; int cnt = 0;
+        for (int bid : g[gi]) { float[] m = wm.get(bid); if (m!=null){for(int j=0;j<16;j++)avg[j]+=m[j];cnt++;} }
+        if (cnt == 0) return new float[]{nx,ny,nz};
+        float inv = 1f/cnt; for(int j=0;j<16;j++) avg[j]*=inv;
+        // Apply only 3x3 rotation part (no translation)
+        float rx = avg[0]*nx + avg[4]*ny + avg[8]*nz;
+        float ry = avg[1]*nx + avg[5]*ny + avg[9]*nz;
+        float rz = avg[2]*nx + avg[6]*ny + avg[10]*nz;
+        // Normalize
+        float len = (float)Math.sqrt(rx*rx + ry*ry + rz*rz);
+        if (len > 0.0001f) { rx /= len; ry /= len; rz /= len; }
+        return new float[]{rx, ry, rz};
+    }
+
     // ── Public API ───────────────────────────────────────────────────────────
 
     public void setSequence(int idx) {
@@ -1173,6 +1323,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         SequenceInfo seq = animData.sequences().get(idx);
         animTimeMs    = seq.start();
         lastNanoNs    = 0L;
+        resetRibbons();
+        var cb = onSequenceChanged;
+        if (cb != null) SwingUtilities.invokeLater(() -> cb.accept(idx));
         // Update extent overlay to show sequence extents if available
         pendingExtentUpdate = seq;
     }
@@ -1184,6 +1337,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public void setLooping(boolean l)          { animLooping = l; }
     private volatile Runnable onAnimationFinished;
     public void setOnAnimationFinished(Runnable r) { onAnimationFinished = r; }
+    private volatile java.util.function.IntConsumer onSequenceChanged;
+    public void setOnSequenceChanged(java.util.function.IntConsumer c) { onSequenceChanged = c; }
     public void setTeamColor(int idx)          { int v = TeamColorOptions.clampIndex(idx); if (v != teamColorIdx) { teamColorIdx = v; tcDirty = true; } }
     public int  getTeamColor()                 { return teamColorIdx; }
     public void setShadingMode(ShadingMode m) { shadingMode = m != null ? m : ShadingMode.SOLID; }
@@ -1198,6 +1353,17 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public void setNodeSize(float s)         { nodeSize = Math.max(0.5f, Math.min(20f, s)); }
     public void setHighlightedBoneId(int id)    { highlightedBoneId = id; }
     public void setHighlightedGeosetIdx(int gi) { highlightedGeosetIdx = gi; }
+    public void setGeosetVisible(int gi, boolean visible) {
+        if (geosetVisibility == null && texData != null) {
+            geosetVisibility = new boolean[texData.length];
+            java.util.Arrays.fill(geosetVisibility, true);
+        }
+        if (geosetVisibility != null && gi >= 0 && gi < geosetVisibility.length) {
+            geosetVisibility[gi] = visible;
+        }
+    }
+    public boolean isGeosetVisible(int gi) { return geosetVisible(gi); }
+    public int getGeosetCount() { return texData != null ? texData.length : 0; }
 
     /** Snaps the camera to the model's camera node position/target. */
     public void applyCameraView(CameraNode cam) {
@@ -1270,9 +1436,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             if (bone.name().isEmpty()) continue;
             if (anyTypeFilter) {
                 boolean visible = switch (bone.nodeType()) {
-                    case BONE       -> showBones;
-                    case HELPER     -> showHelpers;
-                    case ATTACHMENT -> showAttachments;
+                    case BONE           -> showBones;
+                    case HELPER         -> showHelpers;
+                    case ATTACHMENT     -> showAttachments;
+                    case RIBBON_EMITTER -> showAttachments; // show with attachments
                 };
                 if (!visible) continue;
             }
@@ -1372,6 +1539,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         // Identity MVP (NDC passthrough)
         float[] identity = identity();
         glUniformMatrix4fv(texMvp, false, identity);
+        if (texMvLoc >= 0) glUniformMatrix4fv(texMvLoc, false, identity);
         glUniform1i(texHasTex, 1);
         glUniform1f(texAlphaThresh, 0f);
         glUniform1f(texAlphaU, 1f);
@@ -1395,15 +1563,15 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     }
     private void compileTexShader() {
         texShader = linkProgram(TEX_VERT, TEX_FRAG);
-        if (texShader != 0) { texMvp = glGetUniformLocation(texShader,"mvp"); texSampler = glGetUniformLocation(texShader,"uTex"); texHasTex = glGetUniformLocation(texShader,"uHasTex"); texAlphaThresh = glGetUniformLocation(texShader,"uAlphaThreshold"); texAlphaU = glGetUniformLocation(texShader,"uAlpha"); texUVTransform = glGetUniformLocation(texShader,"uUVTransform"); texGeosetColor = glGetUniformLocation(texShader,"uGeosetColor"); }
+        if (texShader != 0) { texMvp = glGetUniformLocation(texShader,"mvp"); texMvLoc = glGetUniformLocation(texShader,"uModelView"); texSampler = glGetUniformLocation(texShader,"uTex"); texHasTex = glGetUniformLocation(texShader,"uHasTex"); texAlphaThresh = glGetUniformLocation(texShader,"uAlphaThreshold"); texAlphaU = glGetUniformLocation(texShader,"uAlpha"); texUVTransform = glGetUniformLocation(texShader,"uUVTransform"); texGeosetColor = glGetUniformLocation(texShader,"uGeosetColor"); texUnshaded = glGetUniformLocation(texShader,"uUnshaded"); }
     }
     private void compileLitShader() {
         litShader = linkProgram(LIT_VERT, LIT_FRAG);
-        if (litShader != 0) { litMvp = glGetUniformLocation(litShader,"mvp"); litSampler = glGetUniformLocation(litShader,"uTex"); litHasTex = glGetUniformLocation(litShader,"uHasTex"); litAlphaThresh = glGetUniformLocation(litShader,"uAlphaThreshold"); litAlphaU = glGetUniformLocation(litShader,"uAlpha"); litUVTransform = glGetUniformLocation(litShader,"uUVTransform"); litGeosetColor = glGetUniformLocation(litShader,"uGeosetColor"); }
+        if (litShader != 0) { litMvp = glGetUniformLocation(litShader,"mvp"); litMvLoc = glGetUniformLocation(litShader,"uModelView"); litSampler = glGetUniformLocation(litShader,"uTex"); litHasTex = glGetUniformLocation(litShader,"uHasTex"); litAlphaThresh = glGetUniformLocation(litShader,"uAlphaThreshold"); litAlphaU = glGetUniformLocation(litShader,"uAlpha"); litUVTransform = glGetUniformLocation(litShader,"uUVTransform"); litGeosetColor = glGetUniformLocation(litShader,"uGeosetColor"); litUnshaded = glGetUniformLocation(litShader,"uUnshaded"); }
     }
     private void compileNormalsShader() {
         normalsShader = linkProgram(NORMALS_VERT, NORMALS_FRAG);
-        if (normalsShader != 0) { normalsMvp = glGetUniformLocation(normalsShader, "mvp"); }
+        if (normalsShader != 0) { normalsMvp = glGetUniformLocation(normalsShader, "mvp"); normalsMvLoc = glGetUniformLocation(normalsShader, "uModelView"); }
     }
     static int linkProgram(String vs, String fs) {
         int v = compileShader(GL_VERTEX_SHADER,vs), f = compileShader(GL_FRAGMENT_SHADER,fs);
@@ -1434,12 +1602,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     }
 
     private void buildMeshVao() {
-        float[] v=mesh.vertices(); int[] ix=mesh.indices();
+        float[] v=mesh.vertices(); float[] n=mesh.normals(); int[] ix=mesh.indices();
         if(v.length==0||ix.length==0) return;
-        meshIndexCount=ix.length; meshVao=glGenVertexArrays();meshVbo=glGenBuffers();meshEbo=glGenBuffers();
+        int usage = animData.hasAnimation() ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
+        meshIndexCount=ix.length; meshVao=glGenVertexArrays();meshVbo=glGenBuffers();meshNormVbo=glGenBuffers();meshEbo=glGenBuffers();
         glBindVertexArray(meshVao);
-        glBindBuffer(GL_ARRAY_BUFFER,meshVbo);glBufferData(GL_ARRAY_BUFFER,v,animData.hasAnimation()?GL_DYNAMIC_DRAW:GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER,meshVbo);glBufferData(GL_ARRAY_BUFFER,v,usage);
         glVertexAttribPointer(0,3,GL_FLOAT,false,12,0L);glEnableVertexAttribArray(0);
+        // Normals at location=2
+        glBindBuffer(GL_ARRAY_BUFFER,meshNormVbo);glBufferData(GL_ARRAY_BUFFER,n,usage);
+        glVertexAttribPointer(2,3,GL_FLOAT,false,12,0L);glEnableVertexAttribArray(2);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,meshEbo);glBufferData(GL_ELEMENT_ARRAY_BUFFER,ix,GL_STATIC_DRAW);
         glBindVertexArray(0);
     }
@@ -1458,6 +1630,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
         geoVao       = new int[geoCount];
         geoVbo       = new int[geoCount];
+        geoNormVbo   = new int[geoCount];
         geoUvVbo     = new int[geoCount];
         geoEbo       = new int[geoCount];
         geoIndexCount= new int[geoCount];
@@ -1488,6 +1661,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 float[] verts = new float[vc * 3];
                 System.arraycopy(mesh.vertices(), vertOffset * 3, verts, 0, vc * 3);
 
+                float[] norms = new float[vc * 3];
+                System.arraycopy(mesh.normals(), vertOffset * 3, norms, 0, vc * 3);
+
                 int[] indices = new int[faceCount];
                 for (int ii = 0; ii < faceCount; ii++) indices[ii] = allIndices[indexOffset + ii] - vertOffset;
                 geoIndices[gi] = indices;
@@ -1495,6 +1671,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 int usage = animData.hasAnimation() ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
                 geoVao[gi]        = glGenVertexArrays();
                 geoVbo[gi]        = glGenBuffers();
+                geoNormVbo[gi]    = glGenBuffers();
                 geoEbo[gi]        = glGenBuffers();
                 geoIndexCount[gi] = faceCount;
                 geoVertCount[gi]  = vc;
@@ -1504,6 +1681,12 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 glBufferData(GL_ARRAY_BUFFER, verts, usage);
                 glVertexAttribPointer(0, 3, GL_FLOAT, false, 12, 0L);
                 glEnableVertexAttribArray(0);
+
+                // Per-vertex normals at location=2
+                glBindBuffer(GL_ARRAY_BUFFER, geoNormVbo[gi]);
+                glBufferData(GL_ARRAY_BUFFER, norms, usage);
+                glVertexAttribPointer(2, 3, GL_FLOAT, false, 12, 0L);
+                glEnableVertexAttribArray(2);
 
                 if (texData[gi].hasUvs()) {
                     geoUvVbo[gi] = glGenBuffers();
@@ -1815,9 +1998,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         for (BoneNode bone : bones) {
             float[] pos = boneWorldPos(bone, worldMap);
             switch (bone.nodeType()) {
-                case BONE       -> bonePosList.add(pos);
-                case HELPER     -> helperPosList.add(pos);
-                case ATTACHMENT -> attachPosList.add(pos);
+                case BONE           -> bonePosList.add(pos);
+                case HELPER         -> helperPosList.add(pos);
+                case ATTACHMENT, RIBBON_EMITTER -> attachPosList.add(pos);
             }
         }
         bonePositions   = bonePosList.toArray(new float[0][]);
@@ -1837,9 +2020,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 buf[li++] = parentPos[0]; buf[li++] = parentPos[1]; buf[li++] = parentPos[2];
                 buf[li++] = childPos[0];  buf[li++] = childPos[1];  buf[li++] = childPos[2];
                 switch (type) {
-                    case BONE       -> boneLineVerts += 2;
-                    case HELPER     -> helperLineVerts += 2;
-                    case ATTACHMENT -> attachLineVerts += 2;
+                    case BONE           -> boneLineVerts += 2;
+                    case HELPER         -> helperLineVerts += 2;
+                    case ATTACHMENT, RIBBON_EMITTER -> attachLineVerts += 2;
                 }
             }
         }
@@ -2111,6 +2294,19 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         };
         addMouseListener(a); addMouseMotionListener(a);
         addMouseWheelListener(e->{distance=clamp(distance*(e.getWheelRotation()>0?1.08f:0.92f),MIN_DISTANCE,MAX_DISTANCE);});
+        addKeyListener(new java.awt.event.KeyAdapter() {
+            @Override public void keyPressed(java.awt.event.KeyEvent e) {
+                int seqCount = animData.sequences().size();
+                if (seqCount == 0) return;
+                if (e.getKeyCode() == java.awt.event.KeyEvent.VK_RIGHT || e.getKeyCode() == java.awt.event.KeyEvent.VK_DOWN) {
+                    setSequence((currentSeqIdx + 1) % seqCount);
+                    setPlaying(true);
+                } else if (e.getKeyCode() == java.awt.event.KeyEvent.VK_LEFT || e.getKeyCode() == java.awt.event.KeyEvent.VK_UP) {
+                    setSequence((currentSeqIdx - 1 + seqCount) % seqCount);
+                    setPlaying(true);
+                }
+            }
+        });
     }
     /** Sets the default camera angles used on reset and initial view. */
     public void setInitialCamera(float yaw, float pitch) {
@@ -2122,4 +2318,368 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     private void resetCamera(){yawDegrees=initialYaw;pitchDegrees=initialPitch;panX=0f;panY=0f;applyInitialCameraDistance();}
     static float clamp(float v,float lo,float hi){return Math.max(lo,Math.min(hi,v));}
+
+    // ── Ribbon emitter simulation & rendering ────────────────────────────────
+
+    /** Runtime state for one ribbon emitter (particle trail). */
+    private static final class RibbonState {
+        final RibbonEmitterData data;
+        final float[] pivot;      // emitter node's pivot point [x,y,z]
+        final float[][] abovePos; // ring buffer: world-space "above" edge [maxParticles][3]
+        final float[][] belowPos; // ring buffer: world-space "below" edge [maxParticles][3]
+        final float[][] velocity; // ring buffer: per-particle velocity [maxParticles][3]
+        final float[] health;     // ring buffer: remaining lifetime (seconds)
+        final float[] uvU;        // ring buffer: U texture coordinate
+        final float[] uvV;        // ring buffer: V top texture coordinate
+        final float[] uvV2;       // ring buffer: V bottom texture coordinate
+        int head = 0;             // next write position (newest particle)
+        int count = 0;            // number of alive particles
+        float emission = 0f;      // fractional emission accumulator
+
+        RibbonState(RibbonEmitterData data, float[] pivot) {
+            this.data = data;
+            this.pivot = pivot;
+            int maxParticles = Math.max(4, (int)(data.lifeSpan() * data.emissionRate()) + 2);
+            abovePos = new float[maxParticles][3];
+            belowPos = new float[maxParticles][3];
+            velocity = new float[maxParticles][3];
+            health = new float[maxParticles];
+            uvU = new float[maxParticles];
+            uvV = new float[maxParticles];
+            uvV2 = new float[maxParticles];
+        }
+
+        int capacity() { return health.length; }
+
+        /** Index of the oldest alive particle (tail of ring buffer). */
+        int tail() { return (head - count + capacity()) % capacity(); }
+
+        void reset() {
+            head = 0; count = 0; emission = 0f;
+            for (float[] v : velocity) java.util.Arrays.fill(v, 0f);
+        }
+    }
+
+    private void initRibbons() {
+        if (ribbonEmitters.length == 0) return;
+
+        ribbonStates = new RibbonState[ribbonEmitters.length];
+        ribbonTextures = new int[ribbonEmitters.length];
+        ribbonFilterModes = new int[ribbonEmitters.length];
+
+        // Build objectId → pivot lookup from bones
+        java.util.Map<Integer, float[]> pivotMap = new java.util.HashMap<>();
+        for (BoneNode bone : animData.bones()) {
+            pivotMap.put(bone.objectId(), bone.pivot());
+        }
+
+        for (int i = 0; i < ribbonEmitters.length; i++) {
+            float[] pivot = pivotMap.getOrDefault(ribbonEmitters[i].objectId(), new float[3]);
+            ribbonStates[i] = new RibbonState(ribbonEmitters[i], pivot);
+            // Resolve texture from material
+            int matId = ribbonEmitters[i].materialId();
+            if (matId >= 0 && matId < materials.length && !materials[matId].layers().isEmpty()) {
+                MaterialInfo.LayerInfo layer = materials[matId].layers().get(0);
+                ribbonFilterModes[i] = layer.filterMode();
+                String texPath = layer.texturePath();
+                if (texPath != null && !texPath.isBlank() && modelDir != null) {
+                    ribbonTextures[i] = loadGlTexture(texPath, layer.replaceableId());
+                }
+            }
+        }
+
+        // Compile ribbon shader
+        ribbonShader = linkProgram(RIBBON_VERT, RIBBON_FRAG);
+        if (ribbonShader != 0) {
+            ribbonMvp = glGetUniformLocation(ribbonShader, "mvp");
+            ribbonSampler = glGetUniformLocation(ribbonShader, "tex");
+            ribbonHasTex = glGetUniformLocation(ribbonShader, "uHasTex");
+            ribbonAlphaU = glGetUniformLocation(ribbonShader, "uAlpha");
+        }
+
+        // Create dynamic VAO/VBO for ribbon geometry
+        ribbonVao = glGenVertexArrays();
+        ribbonVbo = glGenBuffers();
+        glBindVertexArray(ribbonVao);
+        glBindBuffer(GL_ARRAY_BUFFER, ribbonVbo);
+        // Pre-allocate buffer (pos=3 + uv=2 + color=3 = 8 floats per vertex)
+        glBufferData(GL_ARRAY_BUFFER, (long) RIBBON_MAX_VERTS * RIBBON_FLOATS_PER_VERT * 4, GL_DYNAMIC_DRAW);
+        // Position at location 0
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, RIBBON_FLOATS_PER_VERT * 4, 0L);
+        glEnableVertexAttribArray(0);
+        // UV at location 1
+        glVertexAttribPointer(1, 2, GL_FLOAT, false, RIBBON_FLOATS_PER_VERT * 4, 3L * 4);
+        glEnableVertexAttribArray(1);
+        // Color at location 2
+        glVertexAttribPointer(2, 3, GL_FLOAT, false, RIBBON_FLOATS_PER_VERT * 4, 5L * 4);
+        glEnableVertexAttribArray(2);
+        glBindVertexArray(0);
+    }
+
+    private int loadGlTexture(String texPath, int replaceableId) {
+        GameDataSource gds = GameDataSource.getInstance();
+        java.awt.image.BufferedImage img = gds.loadTexture(texPath, modelDir, rootDir);
+        if (img == null) return 0;
+        return uploadTexture(img);
+    }
+
+    private void simulateRibbons(float dt) {
+        if (ribbonStates == null || dt <= 0f) return;
+
+        Map<Integer, float[]> wm = lastWorldMap;
+        if (wm == null) return;
+
+        SequenceInfo seq = (currentSeqIdx >= 0 && currentSeqIdx < animData.sequences().size())
+                ? animData.sequences().get(currentSeqIdx) : null;
+        long[] globalSeqs = animData.globalSequences();
+
+        for (RibbonState rs : ribbonStates) {
+            RibbonEmitterData rd = rs.data;
+            float[] matrix = wm.get(rd.objectId());
+            if (matrix == null) continue;
+
+            // Get animated values
+            float gravity = rd.gravity();
+
+            // Update existing particles: aging and gravity always run regardless of visibility
+            int cap = rs.capacity();
+            for (int pi = 0; pi < rs.count; pi++) {
+                int idx = (rs.tail() + pi) % cap;
+                rs.health[idx] -= dt;
+                if (rs.health[idx] <= 0) continue;
+                // Accumulate gravity in velocity (Z-axis downward in WC3 Z-up space)
+                rs.velocity[idx][2] -= gravity * dt;
+                // Apply velocity to both edges
+                float vx = rs.velocity[idx][0] * dt;
+                float vy = rs.velocity[idx][1] * dt;
+                float vz = rs.velocity[idx][2] * dt;
+                rs.abovePos[idx][0] += vx; rs.abovePos[idx][1] += vy; rs.abovePos[idx][2] += vz;
+                rs.belowPos[idx][0] += vx; rs.belowPos[idx][1] += vy; rs.belowPos[idx][2] += vz;
+            }
+
+            // Remove dead particles from tail
+            while (rs.count > 0) {
+                int tailIdx = rs.tail();
+                if (rs.health[tailIdx] > 0) break;
+                rs.count--;
+            }
+
+            // Visibility only gates emission, not aging/removal
+            float vis = interpolateScalar(rd.visibilityTrack(), seq, globalSeqs, 1f);
+
+            // Spawn new particle (at most one per frame, like WC3) — only when visible
+            rs.emission += vis > 0f ? rd.emissionRate() * dt : 0f;
+            if (rs.emission >= 1f) {
+                rs.emission = rs.emission % 1f;
+                float hAbove = interpolateScalar(rd.heightAboveTrack(), seq, globalSeqs, rd.heightAbove());
+                float hBelow = interpolateScalar(rd.heightBelowTrack(), seq, globalSeqs, rd.heightBelow());
+                float[] pivot = rs.pivot;
+                float[] above = transformPoint(matrix, pivot[0], pivot[1] + hAbove, pivot[2]);
+                float[] below = transformPoint(matrix, pivot[0], pivot[1] - hBelow, pivot[2]);
+
+                int slot = rs.head;
+                rs.abovePos[slot][0] = above[0]; rs.abovePos[slot][1] = above[1]; rs.abovePos[slot][2] = above[2];
+                rs.belowPos[slot][0] = below[0]; rs.belowPos[slot][1] = below[1]; rs.belowPos[slot][2] = below[2];
+                rs.velocity[slot][0] = 0f; rs.velocity[slot][1] = 0f; rs.velocity[slot][2] = 0f;
+                rs.health[slot] = rd.lifeSpan();
+                rs.uvU[slot] = 0f;
+                rs.head = (rs.head + 1) % cap;
+                if (rs.count < cap) rs.count++;
+            }
+
+            // Update UV coordinates based on particle age ratio (like war3-model reference)
+            float lifeSpan = rd.lifeSpan();
+            if (lifeSpan <= 0f) lifeSpan = 1f;
+            int columns = Math.max(1, rd.columns());
+            int rows = Math.max(1, rd.rows());
+            int texSlot = rd.textureSlot();
+            // Animated texture slot
+            if (rd.texSlotTrack() != null && !rd.texSlotTrack().isEmpty()) {
+                texSlot = (int) interpolateScalar(rd.texSlotTrack(), seq, globalSeqs, texSlot);
+            }
+            int texCoordX = texSlot % columns;
+            int texCoordY = texSlot / rows;
+            float cellWidth = 1f / columns;
+            float cellHeight = 1f / rows;
+
+            for (int pi = 0; pi < rs.count; pi++) {
+                int idx = (rs.tail() + pi) % cap;
+                // relativePos = age / lifeSpan (0 at birth, 1 at death)
+                float relativePos = 1f - (rs.health[idx] / lifeSpan);
+                rs.uvU[idx] = texCoordX * cellWidth + relativePos * cellWidth;
+                rs.uvV[idx] = texCoordY * cellHeight;
+                rs.uvV2[idx] = (1 + texCoordY) * cellHeight;
+            }
+        }
+    }
+
+    /** Transform a local-space point by a 4x4 column-major matrix. */
+    private static float[] transformPoint(float[] m, float x, float y, float z) {
+        return new float[]{
+            m[0]*x + m[4]*y + m[8]*z  + m[12],
+            m[1]*x + m[5]*y + m[9]*z  + m[13],
+            m[2]*x + m[6]*y + m[10]*z + m[14]
+        };
+    }
+
+    /** Interpolate a scalar animation track at the current animation time. */
+    private float interpolateScalar(AnimTrack track, SequenceInfo seq, long[] globalSeqs, float defaultVal) {
+        if (track == null || track.isEmpty()) return defaultVal;
+        if (seq == null && !track.isGlobal()) return defaultVal;
+        long start = seq != null ? seq.start() : 0;
+        long end = seq != null ? seq.end() : 0;
+        return BoneAnimator.interpTrackScalar(track, animTimeMs, start, end, globalSeqs, defaultVal);
+    }
+
+    private int buildRibbonGeometry(float[] buf) {
+        if (ribbonStates == null) return 0;
+        int vi = 0; // index into buf (in floats)
+        int maxFloats = RIBBON_MAX_VERTS * RIBBON_FLOATS_PER_VERT;
+
+        SequenceInfo seq = (currentSeqIdx >= 0 && currentSeqIdx < animData.sequences().size())
+                ? animData.sequences().get(currentSeqIdx) : null;
+        long[] globalSeqs = animData.globalSequences();
+
+        for (RibbonState rs : ribbonStates) {
+            if (rs.count < 2) continue;
+            RibbonEmitterData rd = rs.data;
+
+            // Get ribbon color (already RGB after parser's readInvFloat32Array)
+            float[] color = rd.color();
+            float cr = color.length >= 3 ? color[0] : 1f;
+            float cg = color.length >= 3 ? color[1] : 1f;
+            float cb = color.length >= 3 ? color[2] : 1f;
+
+            // Override with animated color if present
+            if (rd.colorTrack() != null && !rd.colorTrack().isEmpty()) {
+                float[] animated = interpolateVec3(rd.colorTrack(), seq, globalSeqs, cr, cg, cb);
+                if (animated != null) { cr = animated[0]; cg = animated[1]; cb = animated[2]; }
+            }
+
+            int cap = rs.capacity();
+            // Walk from oldest to newest, building quads between consecutive particles
+            for (int pi = 0; pi < rs.count - 1; pi++) {
+                int i0 = (rs.tail() + pi) % cap;
+                int i1 = (rs.tail() + pi + 1) % cap;
+                if (rs.health[i0] <= 0 || rs.health[i1] <= 0) continue;
+                if (vi + 6 * RIBBON_FLOATS_PER_VERT > maxFloats) break;
+
+                float u0 = rs.uvU[i0], u1 = rs.uvU[i1];
+                float v0top = rs.uvV[i0], v0bot = rs.uvV2[i0];
+                float v1top = rs.uvV[i1], v1bot = rs.uvV2[i1];
+                // Triangle 1: above0, below0, above1
+                vi = addRibbonVert(buf, vi, rs.abovePos[i0], u0, v0top, cr, cg, cb);
+                vi = addRibbonVert(buf, vi, rs.belowPos[i0], u0, v0bot, cr, cg, cb);
+                vi = addRibbonVert(buf, vi, rs.abovePos[i1], u1, v1top, cr, cg, cb);
+                // Triangle 2: below0, below1, above1
+                vi = addRibbonVert(buf, vi, rs.belowPos[i0], u0, v0bot, cr, cg, cb);
+                vi = addRibbonVert(buf, vi, rs.belowPos[i1], u1, v1bot, cr, cg, cb);
+                vi = addRibbonVert(buf, vi, rs.abovePos[i1], u1, v1top, cr, cg, cb);
+            }
+        }
+        return vi / RIBBON_FLOATS_PER_VERT; // vertex count
+    }
+
+    private static int addRibbonVert(float[] buf, int off, float[] pos, float u, float v, float r, float g, float b) {
+        buf[off++] = pos[0]; buf[off++] = pos[1]; buf[off++] = pos[2]; // position
+        buf[off++] = u; buf[off++] = v;                                 // UV
+        buf[off++] = r; buf[off++] = g; buf[off++] = b;                 // color
+        return off;
+    }
+
+    private float[] interpolateVec3(AnimTrack track, SequenceInfo seq, long[] globalSeqs, float dr, float dg, float db) {
+        if (track == null || track.isEmpty()) return null;
+        if (seq == null && !track.isGlobal()) return null;
+        long start = seq != null ? seq.start() : 0;
+        long end = seq != null ? seq.end() : 0;
+        return BoneAnimator.interpTrackVec3(track, animTimeMs, start, end, globalSeqs, dr, dg, db);
+    }
+
+    private void drawRibbons(float[] mvp) {
+        if (ribbonStates == null || ribbonShader == 0) return;
+
+        // Build geometry into CPU buffer
+        float[] buf = new float[RIBBON_MAX_VERTS * RIBBON_FLOATS_PER_VERT];
+        int vertexCount = buildRibbonGeometry(buf);
+        if (vertexCount == 0) return;
+
+        // Upload to VBO
+        glBindBuffer(GL_ARRAY_BUFFER, ribbonVbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0L, java.util.Arrays.copyOf(buf, vertexCount * RIBBON_FLOATS_PER_VERT));
+
+        glUseProgram(ribbonShader);
+        glUniformMatrix4fv(ribbonMvp, false, mvp);
+        if (ribbonSampler >= 0) glUniform1i(ribbonSampler, 0);
+
+        glEnable(GL_BLEND);
+        glDepthMask(false);
+        glDisable(GL_CULL_FACE);
+
+        SequenceInfo seq = (currentSeqIdx >= 0 && currentSeqIdx < animData.sequences().size())
+                ? animData.sequences().get(currentSeqIdx) : null;
+        long[] globalSeqs = animData.globalSequences();
+
+        // Draw each ribbon's portion of the buffer
+        int offset = 0;
+        for (int ri = 0; ri < ribbonStates.length; ri++) {
+            RibbonState rs = ribbonStates[ri];
+            if (rs.count < 2) continue;
+
+            // Count vertices for this ribbon
+            int ribbonVerts = 0;
+            int cap = rs.capacity();
+            for (int pi = 0; pi < rs.count - 1; pi++) {
+                int i0 = (rs.tail() + pi) % cap;
+                int i1 = (rs.tail() + pi + 1) % cap;
+                if (rs.health[i0] > 0 && rs.health[i1] > 0) ribbonVerts += 6;
+            }
+            if (ribbonVerts == 0) continue;
+
+            // Set alpha
+            float alpha = interpolateScalar(rs.data.alphaTrack(), seq, globalSeqs, rs.data.alpha());
+            if (ribbonAlphaU >= 0) glUniform1f(ribbonAlphaU, alpha);
+
+            // Bind texture
+            boolean hasTex = (ribbonTextures != null && ribbonTextures[ri] != 0);
+            if (ribbonHasTex >= 0) glUniform1i(ribbonHasTex, hasTex ? 1 : 0);
+            if (hasTex) {
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, ribbonTextures[ri]);
+            }
+
+            // Set blend mode based on filter mode
+            int fm = (ribbonFilterModes != null) ? ribbonFilterModes[ri] : 0;
+            applyRibbonBlendMode(fm);
+
+            glBindVertexArray(ribbonVao);
+            glDrawArrays(GL_TRIANGLES, offset, ribbonVerts);
+            offset += ribbonVerts;
+        }
+
+        glBindVertexArray(0);
+        glEnable(GL_CULL_FACE);
+        glDepthMask(true);
+        glDisable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glUseProgram(0);
+    }
+
+    private static void applyRibbonBlendMode(int filterMode) {
+        switch (filterMode) {
+            case 0, 1 -> glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // opaque/transparent
+            case 2    -> glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // blend
+            case 3    -> glBlendFunc(GL_SRC_ALPHA, GL_ONE);                 // additive
+            case 4    -> glBlendFunc(GL_SRC_ALPHA, GL_ONE);                 // add alpha
+            case 5    -> glBlendFunc(GL_ZERO, GL_SRC_COLOR);                // modulate
+            case 6    -> glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR);           // modulate 2x
+            default   -> glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        }
+    }
+
+    private void resetRibbons() {
+        if (ribbonStates == null) return;
+        for (RibbonState rs : ribbonStates) rs.reset();
+    }
 }

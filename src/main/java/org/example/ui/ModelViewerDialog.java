@@ -55,6 +55,7 @@ public final class ModelViewerDialog extends JDialog {
             createdCanvas = new GlPreviewCanvas(
                     parsedModel.mesh(), parsedModel.animData(),
                     parsedModel.texData(), parsedModel.collisionShapes(),
+                    parsedModel.ribbonEmitters(), parsedModel.materials(),
                     asset.path().getParent(), scanRoot);
         } catch (Throwable t) {
             System.err.println("[ModelViewer] GlPreviewCanvas failed: " + t);
@@ -958,9 +959,10 @@ public final class ModelViewerDialog extends JDialog {
                         && dmtn.getUserObject() instanceof NodeEntry entry) {
                     setText(entry.label);
                     switch (entry.bone.nodeType()) {
-                        case BONE       -> setForeground(sel ? getForeground() : new Color(200, 150, 50));
-                        case HELPER     -> setForeground(sel ? getForeground() : new Color(180, 180, 60));
-                        case ATTACHMENT -> setForeground(sel ? getForeground() : new Color(60, 180, 200));
+                        case BONE           -> setForeground(sel ? getForeground() : new Color(200, 150, 50));
+                        case HELPER         -> setForeground(sel ? getForeground() : new Color(180, 180, 60));
+                        case ATTACHMENT     -> setForeground(sel ? getForeground() : new Color(60, 180, 200));
+                        case RIBBON_EMITTER -> setForeground(sel ? getForeground() : new Color(200, 80, 180));
                     }
                 }
                 return this;

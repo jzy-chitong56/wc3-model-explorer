@@ -12,7 +12,7 @@ public record BoneNode(
         AnimTrack rot,        // KGRT – rotation (quaternion xyzw) track
         AnimTrack scale       // KGSC – scale track
 ) {
-    public enum NodeType { BONE, HELPER, ATTACHMENT }
+    public enum NodeType { BONE, HELPER, ATTACHMENT, RIBBON_EMITTER }
 
     // Billboard flag masks from MdlxGenericObject
     public static final int FLAG_DONT_INHERIT_TRANSLATION = 0x1;

@@ -2,6 +2,7 @@ package org.example.model;
 
 public record ModelMesh(
         float[] vertices,
+        float[] normals,
         int[] indices,
         float minX,
         float minY,
@@ -11,6 +12,7 @@ public record ModelMesh(
         float maxZ
 ) {
     public static final ModelMesh EMPTY = new ModelMesh(
+            new float[0],
             new float[0],
             new int[0],
             0, 0, 0,

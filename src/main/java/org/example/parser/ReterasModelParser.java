@@ -8,6 +8,7 @@ import com.hiveworkshop.rms.parsers.mdlx.MdlxGeoset;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxGenericObject;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxHelper;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxAttachment;
+import com.hiveworkshop.rms.parsers.mdlx.MdlxRibbonEmitter;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxGeosetAnimation;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxLayer;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxMaterial;
@@ -73,7 +74,7 @@ public final class ReterasModelParser {
             ModelMesh mesh = buildMesh(model);
             return new ReterasParsedModel(buildMetadata(model), mesh, buildAnimData(model),
                     buildTexData(model), buildCameras(model), buildCollisionShapes(model),
-                    buildMaterials(model));
+                    buildMaterials(model), buildRibbonEmitters(model));
         } catch (IOException | RuntimeException ex) {
             return ReterasParsedModel.EMPTY;
         }
@@ -125,6 +126,7 @@ public final class ReterasModelParser {
 
     private static ModelMesh buildMesh(MdlxModel model) {
         List<Float>   vertices = new ArrayList<>();
+        List<Float>   normals  = new ArrayList<>();
         List<Integer> indices  = new ArrayList<>();
 
         for (MdlxGeoset g : model.geosets) {
@@ -133,6 +135,14 @@ public final class ReterasModelParser {
 
             int base = vertices.size() / 3;
             for (float v : g.vertices) vertices.add(v);
+
+            // Extract vertex normals (same count as vertices)
+            if (g.normals != null && g.normals.length == g.vertices.length) {
+                for (float n : g.normals) normals.add(n);
+            } else {
+                // No normals — fill with zeros (shader will use dFdx/dFdy fallback)
+                for (int i = 0; i < g.vertices.length; i++) normals.add(0f);
+            }
 
             int nv = g.vertices.length / 3;
             for (int idx : g.faces) {
@@ -145,6 +155,9 @@ public final class ReterasModelParser {
         float[] va = new float[vertices.size()];
         for (int i = 0; i < va.length; i++) va[i] = vertices.get(i);
 
+        float[] na = new float[normals.size()];
+        for (int i = 0; i < na.length; i++) na[i] = normals.get(i);
+
         int[] ia = indices.stream().mapToInt(Integer::intValue).toArray();
         if (ia.length < 3) return ModelMesh.EMPTY;
 
@@ -155,7 +168,7 @@ public final class ReterasModelParser {
             minY=Math.min(minY,va[i+1]); maxY=Math.max(maxY,va[i+1]);
             minZ=Math.min(minZ,va[i+2]); maxZ=Math.max(maxZ,va[i+2]);
         }
-        return new ModelMesh(va, ia, minX, minY, minZ, maxX, maxY, maxZ);
+        return new ModelMesh(va, na, ia, minX, minY, minZ, maxX, maxY, maxZ);
     }
 
     // ── Texture / UV data ────────────────────────────────────────────────────
@@ -272,6 +285,7 @@ public final class ReterasModelParser {
         for (MdlxBone b : model.bones) { allNodes.add(b); nodeTypes.put(b.objectId, BoneNode.NodeType.BONE); }
         for (MdlxHelper h : model.helpers) { allNodes.add(h); nodeTypes.put(h.objectId, BoneNode.NodeType.HELPER); }
         for (MdlxAttachment a : model.attachments) { allNodes.add(a); nodeTypes.put(a.objectId, BoneNode.NodeType.ATTACHMENT); }
+        for (MdlxRibbonEmitter r : model.ribbonEmitters) { allNodes.add(r); nodeTypes.put(r.objectId, BoneNode.NodeType.RIBBON_EMITTER); }
         allNodes.sort((a, b) -> Integer.compare(a.objectId, b.objectId));
 
         List<float[]> pivots = model.pivotPoints;
@@ -555,6 +569,53 @@ public final class ReterasModelParser {
                     List.copyOf(layers));
         }
         return result;
+    }
+
+    // ── Ribbon emitters ────────────────────────────────────────────────────
+
+    private static RibbonEmitterData[] buildRibbonEmitters(MdlxModel model) {
+        if (model.ribbonEmitters == null || model.ribbonEmitters.isEmpty())
+            return RibbonEmitterData.EMPTY_ARRAY;
+
+        List<RibbonEmitterData> result = new ArrayList<>();
+        for (MdlxRibbonEmitter re : model.ribbonEmitters) {
+            if (re == null) continue;
+
+            AnimTrack heightAboveTrack = AnimTrack.EMPTY;
+            AnimTrack heightBelowTrack = AnimTrack.EMPTY;
+            AnimTrack alphaTrack       = AnimTrack.EMPTY;
+            AnimTrack colorTrack       = AnimTrack.EMPTY;
+            AnimTrack visibilityTrack  = AnimTrack.EMPTY;
+            AnimTrack texSlotTrack     = AnimTrack.EMPTY;
+
+            for (MdlxTimeline<?> tl : re.timelines) {
+                if (tl == null || tl.name == null) continue;
+                String tag = tl.name.asStringValue();
+                AnimTrack extracted = extractTrack(tl);
+                switch (tag) {
+                    case "KRHA" -> heightAboveTrack = extracted;
+                    case "KRHB" -> heightBelowTrack = extracted;
+                    case "KRAL" -> alphaTrack       = extracted;
+                    case "KRCO" -> colorTrack       = extracted;
+                    case "KRVS" -> visibilityTrack  = extracted;
+                    case "KRTX" -> texSlotTrack     = extracted;
+                    // KGTR/KGRT/KGSC handled in buildAnimData via allNodes
+                }
+            }
+
+            result.add(new RibbonEmitterData(
+                    re.objectId, re.materialId,
+                    re.heightAbove, re.heightBelow,
+                    re.alpha,
+                    re.color != null ? re.color.clone() : new float[]{1f, 1f, 1f},
+                    re.lifeSpan, re.gravity,
+                    (int) re.emissionRate,
+                    (int) re.rows, (int) re.columns,
+                    (int) re.textureSlot,
+                    heightAboveTrack, heightBelowTrack, alphaTrack,
+                    colorTrack, visibilityTrack, texSlotTrack));
+        }
+        return result.toArray(new RibbonEmitterData[0]);
     }
 
     // ── Utility ──────────────────────────────────────────────────────────────
