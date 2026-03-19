@@ -47,15 +47,34 @@ public final class SettingsDialog extends JDialog {
         @Override public String toString() { return displayName; }
     }
 
-    private static final ThemeEntry[] THEMES = {
-        new ThemeEntry("Metal (Default)",  "javax.swing.plaf.metal.MetalLookAndFeel"),
-        new ThemeEntry("Nimbus",           "javax.swing.plaf.nimbus.NimbusLookAndFeel"),
-        new ThemeEntry("System",           UIManager.getSystemLookAndFeelClassName()),
-        new ThemeEntry("FlatLaf Light",    "com.formdev.flatlaf.FlatLightLaf"),
-        new ThemeEntry("FlatLaf Dark",     "com.formdev.flatlaf.FlatDarkLaf"),
-        new ThemeEntry("FlatLaf IntelliJ", "com.formdev.flatlaf.FlatIntelliJLaf"),
-        new ThemeEntry("FlatLaf Darcula",  "com.formdev.flatlaf.FlatDarculaLaf"),
-    };
+    private static final ThemeEntry[] THEMES = buildThemeList();
+
+    private static ThemeEntry[] buildThemeList() {
+        List<ThemeEntry> list = new ArrayList<>();
+        list.add(new ThemeEntry("Metal (Default)",  "javax.swing.plaf.metal.MetalLookAndFeel"));
+        list.add(new ThemeEntry("Nimbus",           "javax.swing.plaf.nimbus.NimbusLookAndFeel"));
+        list.add(new ThemeEntry("System",           UIManager.getSystemLookAndFeelClassName()));
+        // Classic Windows L&F (available on Windows only)
+        try {
+            Class.forName("com.sun.java.swing.plaf.windows.WindowsClassicLookAndFeel");
+            list.add(new ThemeEntry("Windows Classic", "com.sun.java.swing.plaf.windows.WindowsClassicLookAndFeel"));
+        } catch (ClassNotFoundException ignored) {}
+        try {
+            Class.forName("com.sun.java.swing.plaf.windows.WindowsLookAndFeel");
+            list.add(new ThemeEntry("Windows",         "com.sun.java.swing.plaf.windows.WindowsLookAndFeel"));
+        } catch (ClassNotFoundException ignored) {}
+        // Motif (cross-platform)
+        try {
+            Class.forName("com.sun.java.swing.plaf.motif.MotifLookAndFeel");
+            list.add(new ThemeEntry("Motif (CDE)",     "com.sun.java.swing.plaf.motif.MotifLookAndFeel"));
+        } catch (ClassNotFoundException ignored) {}
+        // FlatLaf themes
+        list.add(new ThemeEntry("FlatLaf Light",    "com.formdev.flatlaf.FlatLightLaf"));
+        list.add(new ThemeEntry("FlatLaf Dark",     "com.formdev.flatlaf.FlatDarkLaf"));
+        list.add(new ThemeEntry("FlatLaf IntelliJ", "com.formdev.flatlaf.FlatIntelliJLaf"));
+        list.add(new ThemeEntry("FlatLaf Darcula",  "com.formdev.flatlaf.FlatDarculaLaf"));
+        return list.toArray(new ThemeEntry[0]);
+    }
 
     // ── Fields ────────────────────────────────────────────────────────────────
 
@@ -74,13 +93,15 @@ public final class SettingsDialog extends JDialog {
     private final JComboBox<ThumbnailQuality> qualityCombo = new JComboBox<>(ThumbnailQuality.values());
     private final DefaultListModel<ExternalProgram> extProgListModel = new DefaultListModel<>();
     private final JList<ExternalProgram> extProgList = new JList<>(extProgListModel);
+    private GlPreviewCanvas cameraPreview;  // small 3D preview in Camera tab
+    private Path previewTempFile;           // temp file for extracted preview model
 
     public SettingsDialog(JFrame owner, AppSettings settings) {
         super(owner, "Settings", true);
         this.settings = settings;
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
-        setSize(new Dimension(580, 420));
-        setMinimumSize(new Dimension(480, 360));
+        setSize(new Dimension(620, 560));
+        setMinimumSize(new Dimension(520, 420));
         setResizable(true);
         setLocationRelativeTo(owner);
 
@@ -95,6 +116,19 @@ public final class SettingsDialog extends JDialog {
         add(buildButtonBar(), BorderLayout.SOUTH);
 
         loadFromSettings();
+    }
+
+    @Override
+    public void dispose() {
+        // Clean up GL preview and temp file
+        if (cameraPreview != null) {
+            cameraPreview = null;
+        }
+        if (previewTempFile != null) {
+            try { java.nio.file.Files.deleteIfExists(previewTempFile); } catch (Exception ignored) {}
+            previewTempFile = null;
+        }
+        super.dispose();
     }
 
     // ── Panel builders ────────────────────────────────────────────────────────
@@ -157,10 +191,11 @@ public final class SettingsDialog extends JDialog {
         panel.add(new JLabel("Look & Feel:"), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        themeCombo.addActionListener(e -> {
+            ThemeEntry sel = (ThemeEntry) themeCombo.getSelectedItem();
+            if (sel != null) applyTheme(sel.className());
+        });
         panel.add(themeCombo, gbc);
-
-        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 2; gbc.weightx = 1.0;
-        panel.add(new JLabel("<html><font color='gray'>Theme change takes effect after clicking Apply or OK.</font></html>"), gbc);
 
         // Background color row
         gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 1; gbc.weightx = 0;
@@ -176,6 +211,10 @@ public final class SettingsDialog extends JDialog {
             if (chosen != null) {
                 bgColor = chosen;
                 bgColorButton.setBackground(bgColor);
+                if (cameraPreview != null) {
+                    cameraPreview.setBackgroundColor(String.format("%02X%02X%02X",
+                            bgColor.getRed(), bgColor.getGreen(), bgColor.getBlue()));
+                }
             }
         });
         panel.add(bgColorButton, gbc);
@@ -188,9 +227,11 @@ public final class SettingsDialog extends JDialog {
     }
 
     private JPanel buildCameraPanel() {
-        JPanel panel = new JPanel(new GridBagLayout());
-        panel.setBorder(BorderFactory.createEmptyBorder(16, 16, 8, 16));
+        JPanel outer = new JPanel(new BorderLayout(8, 8));
+        outer.setBorder(BorderFactory.createEmptyBorder(8, 12, 4, 12));
 
+        // ── Controls (left/top) ──
+        JPanel controls = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(4, 6, 4, 6);
         gbc.anchor = GridBagConstraints.WEST;
@@ -198,71 +239,134 @@ public final class SettingsDialog extends JDialog {
         // Description
         gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 3; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(new JLabel("<html>Default camera angles for the model viewer and thumbnail generation.</html>"), gbc);
+        controls.add(new JLabel("<html>Default camera angles for the model viewer and thumbnail generation.</html>"), gbc);
 
         // Yaw (azimuth) slider
         gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1; gbc.weightx = 0;
         gbc.fill = GridBagConstraints.NONE;
-        panel.add(new JLabel("Azimuth (yaw):"), gbc);
+        controls.add(new JLabel("Azimuth (yaw):"), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         yawSlider.setMajorTickSpacing(90);
         yawSlider.setMinorTickSpacing(15);
         yawSlider.setPaintTicks(true);
         yawSlider.setPaintLabels(true);
-        yawSlider.addChangeListener(e -> yawLabel.setText(yawSlider.getValue() + "\u00B0"));
-        panel.add(yawSlider, gbc);
+        yawSlider.addChangeListener(e -> {
+            yawLabel.setText(yawSlider.getValue() + "\u00B0");
+            updateCameraPreview();
+        });
+        controls.add(yawSlider, gbc);
 
         gbc.gridx = 2; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
         yawLabel.setPreferredSize(new Dimension(40, 20));
-        panel.add(yawLabel, gbc);
+        controls.add(yawLabel, gbc);
 
         // Pitch (elevation) slider
         gbc.gridx = 0; gbc.gridy = 2; gbc.weightx = 0;
-        panel.add(new JLabel("Elevation (pitch):"), gbc);
+        controls.add(new JLabel("Elevation (pitch):"), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         pitchSlider.setMajorTickSpacing(30);
         pitchSlider.setMinorTickSpacing(10);
         pitchSlider.setPaintTicks(true);
         pitchSlider.setPaintLabels(true);
-        pitchSlider.addChangeListener(e -> pitchLabel.setText(pitchSlider.getValue() + "\u00B0"));
-        panel.add(pitchSlider, gbc);
+        pitchSlider.addChangeListener(e -> {
+            pitchLabel.setText(pitchSlider.getValue() + "\u00B0");
+            updateCameraPreview();
+        });
+        controls.add(pitchSlider, gbc);
 
         gbc.gridx = 2; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
         pitchLabel.setPreferredSize(new Dimension(40, 20));
-        panel.add(pitchLabel, gbc);
+        controls.add(pitchLabel, gbc);
 
         // Thumbnail animation name
         gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 1; gbc.weightx = 0;
         gbc.fill = GridBagConstraints.NONE;
-        panel.add(new JLabel("Thumbnail animation:"), gbc);
+        controls.add(new JLabel("Thumbnail animation:"), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(animNameField, gbc);
+        controls.add(animNameField, gbc);
 
         gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 3; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(new JLabel("<html><font color='gray'>Animation name used for thumbnail pose (e.g. Stand, Attack). Leave empty for bind pose.</font></html>"), gbc);
+        controls.add(new JLabel("<html><font color='gray'>Animation name used for thumbnail pose (e.g. Stand, Attack). Leave empty for bind pose.</font></html>"), gbc);
 
         // Thumbnail quality
         gbc.gridx = 0; gbc.gridy = 5; gbc.gridwidth = 1; gbc.weightx = 0;
         gbc.fill = GridBagConstraints.NONE;
-        panel.add(new JLabel("Thumbnail quality:"), gbc);
+        controls.add(new JLabel("Thumbnail quality:"), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(qualityCombo, gbc);
+        controls.add(qualityCombo, gbc);
 
         gbc.gridx = 0; gbc.gridy = 6; gbc.gridwidth = 3; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(new JLabel("<html><font color='gray'>Higher quality renders at a larger resolution then downscales. Uses more GPU time.</font></html>"), gbc);
+        controls.add(new JLabel("<html><font color='gray'>Higher quality renders at a larger resolution then downscales. Uses more GPU time.</font></html>"), gbc);
 
-        // Push to top
-        gbc.gridx = 0; gbc.gridy = 7; gbc.gridwidth = 3; gbc.weighty = 1.0;
-        gbc.fill = GridBagConstraints.BOTH;
-        panel.add(new JPanel(), gbc);
+        outer.add(controls, BorderLayout.NORTH);
 
-        return panel;
+        // ── 3D Preview (center, fills remaining space) ──
+        JPanel previewPanel = new JPanel(new BorderLayout());
+        previewPanel.setBorder(BorderFactory.createTitledBorder("Preview"));
+        JLabel loadingLabel = new JLabel("Loading preview model…", JLabel.CENTER);
+        previewPanel.add(loadingLabel, BorderLayout.CENTER);
+        outer.add(previewPanel, BorderLayout.CENTER);
+
+        // Load preview model asynchronously
+        new SwingWorker<ReterasParsedModel, Void>() {
+            Path tempFile;
+            @Override protected ReterasParsedModel doInBackground() {
+                // Try to extract footman.mdx from game data sources
+                GameDataSource gds = GameDataSource.getInstance();
+                tempFile = gds.extractToTemp("units\\human\\footman\\footman.mdx");
+                if (tempFile == null) return null;
+                previewTempFile = tempFile;
+                return ReterasModelParser.parse(tempFile);
+            }
+            @Override protected void done() {
+                try {
+                    ReterasParsedModel parsed = get();
+                    if (parsed == null || parsed == ReterasParsedModel.EMPTY) {
+                        loadingLabel.setText("No preview (footman.mdx not found in data sources)");
+                        return;
+                    }
+                    previewPanel.remove(loadingLabel);
+                    cameraPreview = new GlPreviewCanvas(parsed);
+                    cameraPreview.setInitialCamera(yawSlider.getValue(), pitchSlider.getValue());
+                    cameraPreview.setShadingMode(GlPreviewCanvas.ShadingMode.TEXTURED);
+                    cameraPreview.setBackgroundColor(String.format("%02X%02X%02X",
+                            bgColor.getRed(), bgColor.getGreen(), bgColor.getBlue()));
+                    // Select "Stand" animation if available
+                    selectStandAnimation(cameraPreview, parsed);
+                    cameraPreview.setPlaying(true);
+                    previewPanel.add(cameraPreview, BorderLayout.CENTER);
+                    previewPanel.revalidate();
+                    previewPanel.repaint();
+                } catch (Exception ex) {
+                    loadingLabel.setText("Preview failed: " + ex.getMessage());
+                }
+            }
+        }.execute();
+
+        return outer;
+    }
+
+    private void updateCameraPreview() {
+        if (cameraPreview != null) {
+            cameraPreview.setInitialCamera(yawSlider.getValue(), pitchSlider.getValue());
+        }
+    }
+
+    private static void selectStandAnimation(GlPreviewCanvas canvas, ReterasParsedModel parsed) {
+        var sequences = parsed.animData().sequences();
+        for (int i = 0; i < sequences.size(); i++) {
+            if (sequences.get(i).name().toLowerCase().contains("stand")) {
+                canvas.setSequence(i);
+                return;
+            }
+        }
+        if (!sequences.isEmpty()) canvas.setSequence(0);
     }
 
     private JPanel buildExternalProgramsPanel() {
@@ -388,15 +492,12 @@ public final class SettingsDialog extends JDialog {
         bar.setBorder(BorderFactory.createEmptyBorder(0, 8, 4, 8));
 
         JButton applyBtn  = new JButton("Apply");
-        JButton okBtn     = new JButton("OK");
         JButton cancelBtn = new JButton("Cancel");
 
         applyBtn.addActionListener(e -> applyAndReload());
-        okBtn.addActionListener(e -> { applyAndReload(); dispose(); });
         cancelBtn.addActionListener(e -> dispose());
 
         bar.add(applyBtn);
-        bar.add(okBtn);
         bar.add(cancelBtn);
         return bar;
     }
@@ -489,7 +590,6 @@ public final class SettingsDialog extends JDialog {
             UIManager.setLookAndFeel(className);
             for (Window w : Window.getWindows()) {
                 SwingUtilities.updateComponentTreeUI(w);
-                w.pack();
             }
         } catch (Exception ex) {
             System.err.println("[Theme] Failed to apply look and feel: " + ex.getMessage());

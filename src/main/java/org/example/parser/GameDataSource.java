@@ -134,6 +134,35 @@ public final class GameDataSource {
         return !sources.isEmpty();
     }
 
+    /**
+     * Extracts a game-relative path (e.g. "units\\human\\footman\\footman.mdx") from
+     * the archive sources to a temporary file on disk. Returns the temp file Path,
+     * or null if not found. The caller is responsible for cleanup.
+     */
+    public Path extractToTemp(String gamePath) {
+        if (gamePath == null || gamePath.isBlank()) return null;
+        String normalised = gamePath.replace('\\', '/');
+        String backslash = normalised.replace('/', '\\');
+        String lower = normalised.toLowerCase(Locale.ROOT);
+        String lowerBackslash = lower.replace('/', '\\');
+
+        for (DataSource src : sources) {
+            for (String variant : new String[]{normalised, backslash, lower, lowerBackslash}) {
+                if (!src.has(variant)) continue;
+                try (InputStream is = src.getResourceAsStream(variant)) {
+                    if (is == null) continue;
+                    String ext = normalised.contains(".") ? normalised.substring(normalised.lastIndexOf('.')) : ".tmp";
+                    Path tmp = Files.createTempFile("wc3_preview_", ext);
+                    Files.write(tmp, is.readAllBytes());
+                    return tmp;
+                } catch (Exception ex) {
+                    System.err.println("[GameDataSource] Failed to extract '" + variant + "': " + ex.getMessage());
+                }
+            }
+        }
+        return null;
+    }
+
     public BufferedImage loadTeamColorTexture(int teamColorIdx, Path modelDir, Path rootDir) {
         return loadTexture(teamColorPath(teamColorIdx), modelDir, rootDir);
     }
