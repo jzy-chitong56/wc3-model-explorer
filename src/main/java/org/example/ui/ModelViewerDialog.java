@@ -392,12 +392,25 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(tcRow);
 
         // Wire sequence combo
+        final boolean[] suppressCallback = {false};
         seqCombo.addActionListener(e -> {
+            if (suppressCallback[0]) return;
             if (previewCanvas != null) {
                 int idx = seqCombo.getSelectedIndex();
                 previewCanvas.setSequence(idx);
             }
         });
+
+        // Sync combo when sequence changes via keyboard shortcut
+        if (previewCanvas != null) {
+            previewCanvas.setOnSequenceChanged(idx -> {
+                if (idx >= 0 && idx < seqCombo.getItemCount()) {
+                    suppressCallback[0] = true;
+                    seqCombo.setSelectedIndex(idx);
+                    suppressCallback[0] = false;
+                }
+            });
+        }
 
         // Glue at bottom
         panel.add(Box.createVerticalGlue());
@@ -463,7 +476,40 @@ public final class ModelViewerDialog extends JDialog {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(new EmptyBorder(8, 8, 8, 8));
 
-        JLabel header = new JLabel("Textures (" + texData.length + ")");
+        // Collect unique textures from all geoset layers
+        Path modelDir = asset.path().getParent();
+        GameDataSource gds = GameDataSource.getInstance();
+
+        // Use LinkedHashMap to preserve insertion order and deduplicate by path+replaceableId
+        java.util.LinkedHashMap<String, int[]> uniqueTextures = new java.util.LinkedHashMap<>();
+        for (GeosetTexData td : texData) {
+            if (!td.layers().isEmpty()) {
+                for (GeosetTexData.LayerTexData layer : td.layers()) {
+                    String key = layer.texturePath() + "|" + layer.replaceableId();
+                    uniqueTextures.putIfAbsent(key, new int[]{layer.replaceableId()});
+                }
+            } else {
+                String key = td.texturePath() + "|" + td.replaceableId();
+                uniqueTextures.putIfAbsent(key, new int[]{td.replaceableId()});
+            }
+        }
+
+        // Build display list from unique entries
+        record TexEntry(String path, int replaceableId, String source) {}
+        List<TexEntry> uniqueList = new java.util.ArrayList<>();
+        for (var entry : uniqueTextures.entrySet()) {
+            String path = entry.getKey().substring(0, entry.getKey().lastIndexOf('|'));
+            int repId = entry.getValue()[0];
+            String source;
+            if (path.isEmpty()) {
+                source = repId > 0 ? "REPLACEABLE" : "NONE";
+            } else {
+                source = gds.resolveTextureSource(path, repId, modelDir, scanRoot);
+            }
+            uniqueList.add(new TexEntry(path, repId, source));
+        }
+
+        JLabel header = new JLabel("Textures (" + uniqueList.size() + ")");
         header.setFont(header.getFont().deriveFont(Font.BOLD));
         header.setBorder(new EmptyBorder(0, 0, 6, 0));
         panel.add(header, BorderLayout.NORTH);
@@ -473,18 +519,9 @@ public final class ModelViewerDialog extends JDialog {
             @Override public boolean isCellEditable(int row, int col) { return false; }
         };
 
-        Path modelDir = asset.path().getParent();
-        GameDataSource gds = GameDataSource.getInstance();
-
-        for (int i = 0; i < texData.length; i++) {
-            String path = texData[i].texturePath();
-            String source;
-            if (path.isEmpty()) {
-                source = texData[i].replaceableId() > 0 ? "REPLACEABLE" : "NONE";
-            } else {
-                source = gds.resolveTextureSource(path, texData[i].replaceableId(), modelDir, scanRoot);
-            }
-            tableModel.addRow(new Object[]{i, path.isEmpty() ? "(no texture)" : path, source});
+        for (int i = 0; i < uniqueList.size(); i++) {
+            TexEntry te = uniqueList.get(i);
+            tableModel.addRow(new Object[]{i, te.path().isEmpty() ? "(no texture)" : te.path(), te.source()});
         }
 
         JTable table = new JTable(tableModel);
@@ -534,8 +571,10 @@ public final class ModelViewerDialog extends JDialog {
             public void mouseClicked(java.awt.event.MouseEvent e) {
                 if (e.getClickCount() == 2) {
                     int row = table.rowAtPoint(e.getPoint());
-                    if (row >= 0 && row < texData.length) {
-                        showTexturePopup(row);
+                    if (row >= 0 && row < uniqueList.size()) {
+                        List<String> paths = new java.util.ArrayList<>();
+                        for (var te : uniqueList) paths.add(te.path());
+                        showTexturePopup(paths, row);
                     }
                 }
             }
@@ -553,42 +592,65 @@ public final class ModelViewerDialog extends JDialog {
             }
         });
 
-        JScrollPane scroll = new JScrollPane(table);
-        panel.add(scroll, BorderLayout.CENTER);
+        JScrollPane tableScroll = new JScrollPane(table);
 
-        // Texture preview below the table
-        JLabel previewLabel = new JLabel();
-        previewLabel.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
-        previewLabel.setPreferredSize(new Dimension(0, 180));
-        previewLabel.setBorder(new EmptyBorder(4, 0, 0, 0));
-        panel.add(previewLabel, BorderLayout.SOUTH);
+        // Texture preview panel that scales to fill available space
+        BufferedImage[] previewImg = {null};
+        JPanel previewPanel = new JPanel(new BorderLayout());
+        JLabel previewInfo = new JLabel("", SwingConstants.CENTER);
+        previewInfo.setFont(previewInfo.getFont().deriveFont(Font.PLAIN, 11f));
+        previewInfo.setBorder(new EmptyBorder(2, 4, 2, 4));
+
+        JPanel imgPanel = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                if (previewImg[0] == null) return;
+                int pw = getWidth(), ph = getHeight();
+                int iw = previewImg[0].getWidth(), ih = previewImg[0].getHeight();
+                double scale = Math.min((double) pw / iw, (double) ph / ih);
+                int dw = (int) (iw * scale), dh = (int) (ih * scale);
+                int x = (pw - dw) / 2, y = (ph - dh) / 2;
+                g.drawImage(previewImg[0], x, y, dw, dh, null);
+            }
+        };
+        imgPanel.setBackground(Color.DARK_GRAY);
+        previewPanel.add(previewInfo, BorderLayout.NORTH);
+        previewPanel.add(imgPanel, BorderLayout.CENTER);
+
+        // Split pane: table on top, preview on bottom, resizable
+        javax.swing.JSplitPane splitPane = new javax.swing.JSplitPane(
+                javax.swing.JSplitPane.VERTICAL_SPLIT, tableScroll, previewPanel);
+        splitPane.setResizeWeight(0.4);
+        splitPane.setDividerLocation(150);
+        splitPane.setContinuousLayout(true);
+        panel.add(splitPane, BorderLayout.CENTER);
 
         table.getSelectionModel().addListSelectionListener(e -> {
             if (e.getValueIsAdjusting()) return;
             int row = table.getSelectedRow();
-            if (row < 0 || row >= texData.length) {
-                previewLabel.setIcon(null);
-                previewLabel.setText("");
+            if (row < 0 || row >= uniqueList.size()) {
+                previewImg[0] = null;
+                previewInfo.setText("");
+                imgPanel.repaint();
                 return;
             }
-            String texPath = texData[row].texturePath();
+            String texPath = uniqueList.get(row).path();
             if (texPath.isEmpty()) {
-                previewLabel.setIcon(null);
-                previewLabel.setText("(no texture)");
+                previewImg[0] = null;
+                previewInfo.setText("(no texture)");
+                imgPanel.repaint();
                 return;
             }
             BufferedImage img = GameDataSource.getInstance().loadTexture(texPath, modelDir, scanRoot);
             if (img != null) {
-                int maxH = 170;
-                int w = img.getWidth(), h = img.getHeight();
-                if (h > maxH) { w = w * maxH / h; h = maxH; }
-                previewLabel.setIcon(new javax.swing.ImageIcon(
-                        img.getScaledInstance(w, h, java.awt.Image.SCALE_SMOOTH)));
-                previewLabel.setText("");
+                previewImg[0] = img;
+                previewInfo.setText(String.format("%s    %d x %d", texPath, img.getWidth(), img.getHeight()));
             } else {
-                previewLabel.setIcon(null);
-                previewLabel.setText("Texture not found");
+                previewImg[0] = null;
+                previewInfo.setText("Texture not found");
             }
+            imgPanel.repaint();
         });
 
         return panel;
@@ -766,10 +828,19 @@ public final class ModelViewerDialog extends JDialog {
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         list.setFixedCellHeight(-1); // variable height
 
-        // Custom renderer: two-line card per geoset
+        // Per-geoset visibility state (all visible by default)
+        boolean[] visible = new boolean[listModel.size()];
+        java.util.Arrays.fill(visible, true);
+
+        // Custom renderer: two-line card per geoset with visibility checkbox
         list.setCellRenderer((jList, entry, index, isSelected, cellHasFocus) -> {
             JPanel cell = new JPanel(new BorderLayout(4, 0));
             cell.setBorder(new EmptyBorder(6, 8, 6, 8));
+
+            JCheckBox cb = new JCheckBox();
+            cb.setSelected(index < visible.length && visible[index]);
+            cb.setOpaque(false);
+            cell.add(cb, BorderLayout.WEST);
 
             JLabel title = new JLabel("Geoset " + entry.geosetIdx);
             title.setFont(title.getFont().deriveFont(Font.BOLD, 12f));
@@ -799,6 +870,29 @@ public final class ModelViewerDialog extends JDialog {
             return cell;
         });
 
+        // Click listener: toggle visibility when clicking on the checkbox area
+        list.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                int idx = list.locationToIndex(e.getPoint());
+                if (idx < 0) return;
+                var bounds = list.getCellBounds(idx, idx);
+                if (bounds == null || !bounds.contains(e.getPoint())) return;
+                // Check if click is in the checkbox region (first ~30px)
+                int relX = e.getX() - bounds.x;
+                if (relX <= 30) {
+                    GeosetEntry entry = listModel.get(idx);
+                    visible[idx] = !visible[idx];
+                    if (previewCanvas != null) previewCanvas.setGeosetVisible(entry.geosetIdx, visible[idx]);
+                    list.repaint();
+                }
+            }
+            @Override
+            public void mouseExited(MouseEvent e) {
+                if (previewCanvas != null) previewCanvas.setHighlightedGeosetIdx(-1);
+            }
+        });
+
         // Hover listener: highlight geoset on the 3D mesh
         list.addMouseMotionListener(new MouseMotionAdapter() {
             @Override
@@ -810,12 +904,6 @@ public final class ModelViewerDialog extends JDialog {
                 } else {
                     if (previewCanvas != null) previewCanvas.setHighlightedGeosetIdx(-1);
                 }
-            }
-        });
-        list.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseExited(MouseEvent e) {
-                if (previewCanvas != null) previewCanvas.setHighlightedGeosetIdx(-1);
             }
         });
 
@@ -945,21 +1033,19 @@ public final class ModelViewerDialog extends JDialog {
         return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
     }
 
-    private void showTexturePopup(int startIndex) {
-        GeosetTexData[] texData = parsedModel.texData();
-        if (texData.length == 0) return;
-
-        // Collect all non-empty texture paths with their indices
-        List<Integer> texIndices = new java.util.ArrayList<>();
-        for (int i = 0; i < texData.length; i++) {
-            if (!texData[i].texturePath().isBlank()) texIndices.add(i);
+    private void showTexturePopup(List<String> allPaths, int startIndex) {
+        // Filter to non-blank paths for navigation
+        List<String> texPaths = new java.util.ArrayList<>();
+        for (String p : allPaths) {
+            if (!p.isBlank()) texPaths.add(p);
         }
-        if (texIndices.isEmpty()) return;
+        if (texPaths.isEmpty()) return;
 
-        // Find starting position in the filtered list
+        // Find starting position
+        String startPath = (startIndex >= 0 && startIndex < allPaths.size()) ? allPaths.get(startIndex) : "";
         int[] currentPos = {0};
-        for (int i = 0; i < texIndices.size(); i++) {
-            if (texIndices.get(i) == startIndex) { currentPos[0] = i; break; }
+        for (int i = 0; i < texPaths.size(); i++) {
+            if (texPaths.get(i).equals(startPath)) { currentPos[0] = i; break; }
         }
 
         JDialog popup = new JDialog(this, "Texture Preview", true);
@@ -968,82 +1054,139 @@ public final class ModelViewerDialog extends JDialog {
         // State
         boolean[] showAlpha = {false};
         boolean[] showCheckerboard = {true};
+        BufferedImage[] currentImg = {null};
+        double[] zoom = {1.0};
+        double[] panX = {0}, panY = {0};
+        int[] dragStart = {0, 0};
+        double[] panStart = {0, 0};
 
         JLabel infoLabel = new JLabel("", SwingConstants.CENTER);
         infoLabel.setBorder(new EmptyBorder(6, 12, 2, 12));
         infoLabel.setFont(infoLabel.getFont().deriveFont(Font.PLAIN, 11f));
 
-        JLabel imgLabel = new JLabel("", SwingConstants.CENTER) {
+        JPanel imgPanel = new JPanel() {
             @Override
             protected void paintComponent(Graphics g) {
-                if (showCheckerboard[0] && getIcon() != null) {
+                super.paintComponent(g);
+                BufferedImage img = currentImg[0];
+                if (img == null) return;
+
+                if (showCheckerboard[0]) {
                     drawCheckerboard(g, getWidth(), getHeight());
                 }
-                super.paintComponent(g);
+
+                int pw = getWidth(), ph = getHeight();
+                int iw = img.getWidth(), ih = img.getHeight();
+                // Fit scale, then apply user zoom
+                double fitScale = Math.min((double) pw / iw, (double) ph / ih);
+                double scale = fitScale * zoom[0];
+                int dw = (int) (iw * scale), dh = (int) (ih * scale);
+                int x = (int) ((pw - dw) / 2.0 + panX[0]);
+                int y = (int) ((ph - dh) / 2.0 + panY[0]);
+                ((Graphics2D) g).setRenderingHint(
+                        java.awt.RenderingHints.KEY_INTERPOLATION,
+                        zoom[0] > 2.0 ? java.awt.RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
+                                      : java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                g.drawImage(img, x, y, dw, dh, null);
             }
         };
-        imgLabel.setHorizontalAlignment(SwingConstants.CENTER);
-        imgLabel.setBorder(new EmptyBorder(4, 12, 4, 12));
+        imgPanel.setBackground(new Color(60, 60, 60));
+
+        // Mouse wheel zoom (zoom toward cursor)
+        imgPanel.addMouseWheelListener(e -> {
+            double oldZoom = zoom[0];
+            double factor = e.getWheelRotation() < 0 ? 1.15 : 1.0 / 1.15;
+            zoom[0] = Math.max(0.1, Math.min(50.0, zoom[0] * factor));
+            // Zoom toward cursor position
+            double mx = e.getX() - imgPanel.getWidth() / 2.0 - panX[0];
+            double my = e.getY() - imgPanel.getHeight() / 2.0 - panY[0];
+            double ratio = 1.0 - zoom[0] / oldZoom;
+            panX[0] += mx * ratio;
+            panY[0] += my * ratio;
+            imgPanel.repaint();
+        });
+
+        // Mouse drag to pan
+        imgPanel.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mousePressed(java.awt.event.MouseEvent e) {
+                dragStart[0] = e.getX(); dragStart[1] = e.getY();
+                panStart[0] = panX[0]; panStart[1] = panY[0];
+                imgPanel.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR));
+            }
+            @Override public void mouseReleased(java.awt.event.MouseEvent e) {
+                imgPanel.setCursor(java.awt.Cursor.getDefaultCursor());
+            }
+        });
+        imgPanel.addMouseMotionListener(new java.awt.event.MouseMotionAdapter() {
+            @Override public void mouseDragged(java.awt.event.MouseEvent e) {
+                panX[0] = panStart[0] + (e.getX() - dragStart[0]);
+                panY[0] = panStart[1] + (e.getY() - dragStart[1]);
+                imgPanel.repaint();
+            }
+        });
 
         Runnable refreshImage = () -> {
-            int idx = texIndices.get(currentPos[0]);
-            String texPath = texData[idx].texturePath();
-            popup.setTitle("Texture – " + texPath + " (" + (currentPos[0] + 1) + "/" + texIndices.size() + ")");
+            String texPath = texPaths.get(currentPos[0]);
+            popup.setTitle("Texture – " + texPath + " (" + (currentPos[0] + 1) + "/" + texPaths.size() + ")");
 
             Path modelDir = asset.path().getParent();
             BufferedImage img = GameDataSource.getInstance().loadTexture(texPath, modelDir, scanRoot);
             if (img == null) {
                 infoLabel.setText("Texture not found: " + texPath);
-                imgLabel.setIcon(null);
+                currentImg[0] = null;
+                imgPanel.repaint();
                 return;
             }
 
             BufferedImage display = showAlpha[0] ? extractAlphaChannel(img) : img;
+            currentImg[0] = display;
 
-            infoLabel.setText(String.format("%s    %d x %d    %s",
-                    texPath, img.getWidth(), img.getHeight(), imageTypeName(img.getType())));
+            infoLabel.setText(String.format("%s    %d x %d    %s    (%.0f%%)",
+                    texPath, img.getWidth(), img.getHeight(), imageTypeName(img.getType()), zoom[0] * 100));
 
-            int maxDim = 512;
-            int dispW = display.getWidth(), dispH = display.getHeight();
-            if (dispW > maxDim || dispH > maxDim) {
-                double sc = Math.min((double) maxDim / dispW, (double) maxDim / dispH);
-                dispW = (int) (dispW * sc);
-                dispH = (int) (dispH * sc);
-            }
-            imgLabel.setIcon(new ImageIcon(display.getScaledInstance(dispW, dispH, java.awt.Image.SCALE_SMOOTH)));
-            imgLabel.repaint();
+            imgPanel.repaint();
+        };
+
+        // Reset zoom/pan on texture change
+        Runnable resetAndRefresh = () -> {
+            zoom[0] = 1.0; panX[0] = 0; panY[0] = 0;
+            refreshImage.run();
         };
 
         // Navigation + toggles toolbar
         JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 4));
         JButton prevBtn = new JButton("<");
         JButton nextBtn = new JButton(">");
+        JButton resetBtn = new JButton("1:1");
         JCheckBox alphaCb = new JCheckBox("Alpha");
         JCheckBox checkerCb = new JCheckBox("Checkerboard", true);
 
         prevBtn.addActionListener(e -> {
-            currentPos[0] = (currentPos[0] - 1 + texIndices.size()) % texIndices.size();
-            refreshImage.run();
+            currentPos[0] = (currentPos[0] - 1 + texPaths.size()) % texPaths.size();
+            resetAndRefresh.run();
         });
         nextBtn.addActionListener(e -> {
-            currentPos[0] = (currentPos[0] + 1) % texIndices.size();
-            refreshImage.run();
+            currentPos[0] = (currentPos[0] + 1) % texPaths.size();
+            resetAndRefresh.run();
         });
+        resetBtn.setToolTipText("Reset zoom & pan");
+        resetBtn.addActionListener(e -> resetAndRefresh.run());
         alphaCb.addActionListener(e -> { showAlpha[0] = alphaCb.isSelected(); refreshImage.run(); });
-        checkerCb.addActionListener(e -> { showCheckerboard[0] = checkerCb.isSelected(); imgLabel.repaint(); });
+        checkerCb.addActionListener(e -> { showCheckerboard[0] = checkerCb.isSelected(); imgPanel.repaint(); });
 
-        prevBtn.setEnabled(texIndices.size() > 1);
-        nextBtn.setEnabled(texIndices.size() > 1);
+        prevBtn.setEnabled(texPaths.size() > 1);
+        nextBtn.setEnabled(texPaths.size() > 1);
         toolbar.add(prevBtn);
         toolbar.add(nextBtn);
+        toolbar.add(resetBtn);
         toolbar.add(alphaCb);
         toolbar.add(checkerCb);
 
         popup.add(infoLabel, BorderLayout.NORTH);
-        popup.add(imgLabel, BorderLayout.CENTER);
+        popup.add(imgPanel, BorderLayout.CENTER);
         popup.add(toolbar, BorderLayout.SOUTH);
         popup.setSize(new Dimension(560, 620));
-        refreshImage.run();
+        resetAndRefresh.run();
         popup.setLocationRelativeTo(this);
         popup.setVisible(true);
     }
