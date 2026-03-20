@@ -21,6 +21,8 @@ import java.text.NumberFormat;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import javax.imageio.ImageIO;
+import java.io.File;
 
 /**
  * Model viewer dialog with a split-pane layout:
@@ -37,6 +39,7 @@ public final class ModelViewerDialog extends JDialog {
     private final ReterasParsedModel parsedModel;
     private final ModelAsset asset;
     private final Path scanRoot;
+    private Timer scrubberSyncTimer;
 
     public ModelViewerDialog(JFrame owner, ModelAsset asset, Path scanRoot) {
         super(owner, "Model Viewer – " + asset.fileName(), false);
@@ -73,6 +76,7 @@ public final class ModelViewerDialog extends JDialog {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
+                if (scrubberSyncTimer != null) scrubberSyncTimer.stop();
                 if (previewCanvas == null) { dispose(); return; }
                 new Thread(() -> {
                     previewCanvas.stopRenderThread();
@@ -113,6 +117,7 @@ public final class ModelViewerDialog extends JDialog {
             // JLayeredPane with manual sizing so GL canvas + overlays stack correctly
             JLabel statsLabel = buildStatsHud();
             JComboBox<String> shadingCombo = buildShadingCombo();
+            JButton screenshotBtn = buildScreenshotButton();
 
             // JLayeredPane with doLayout() override to reliably size children
             JLayeredPane layered = new JLayeredPane() {
@@ -123,12 +128,15 @@ public final class ModelViewerDialog extends JDialog {
                     statsLabel.setBounds(8, 8, 150, 95);
                     Dimension cs = shadingCombo.getPreferredSize();
                     shadingCombo.setBounds(w - cs.width - 8, 8, cs.width, cs.height);
+                    Dimension ss = screenshotBtn.getPreferredSize();
+                    screenshotBtn.setBounds(w - ss.width - 8, h - ss.height - 8, ss.width, ss.height);
                 }
             };
 
             layered.add(previewCanvas, JLayeredPane.DEFAULT_LAYER);
             layered.add(statsLabel, JLayeredPane.PALETTE_LAYER);
             layered.add(shadingCombo, JLayeredPane.PALETTE_LAYER);
+            layered.add(screenshotBtn, JLayeredPane.PALETTE_LAYER);
 
             layered.setPreferredSize(new Dimension(VIEW_W, 600));
             panel.add(layered, BorderLayout.CENTER);
@@ -193,6 +201,38 @@ public final class ModelViewerDialog extends JDialog {
             }
         });
         return combo;
+    }
+
+    private JButton buildScreenshotButton() {
+        JButton btn = new JButton("Screenshot");
+        btn.setFocusable(false);
+        btn.setToolTipText("Save current view as PNG");
+        btn.addActionListener(e -> {
+            if (previewCanvas == null) return;
+            previewCanvas.requestScreenshot().thenAccept(img -> {
+                SwingUtilities.invokeLater(() -> {
+                    JFileChooser fc = new JFileChooser();
+                    if (MainWindow.lastChooserDir != null) fc.setCurrentDirectory(MainWindow.lastChooserDir);
+                    String baseName = asset.fileName().replaceFirst("\\.[^.]+$", "");
+                    fc.setSelectedFile(new File(baseName + ".png"));
+                    fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("PNG Image", "png"));
+                    if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+                        MainWindow.lastChooserDir = fc.getCurrentDirectory();
+                        File file = fc.getSelectedFile();
+                        if (!file.getName().toLowerCase().endsWith(".png")) {
+                            file = new File(file.getAbsolutePath() + ".png");
+                        }
+                        try {
+                            ImageIO.write(img, "PNG", file);
+                        } catch (Exception ex) {
+                            JOptionPane.showMessageDialog(this, "Failed to save screenshot:\n" + ex.getMessage(),
+                                    "Error", JOptionPane.ERROR_MESSAGE);
+                        }
+                    }
+                });
+            });
+        });
+        return btn;
     }
 
     // ── Right panel: tabbed pane ─────────────────────────────────────────
@@ -262,6 +302,57 @@ public final class ModelViewerDialog extends JDialog {
         playRow.add(recenterBtn);
         panel.add(playRow);
         panel.add(Box.createVerticalStrut(8));
+
+        // Timeline scrubber (full-width)
+        JLabel timeLabel = new JLabel("0 ms");
+        timeLabel.setPreferredSize(new Dimension(70, 20));
+        SequenceInfo initSeq = (!sequences.isEmpty() && previewCanvas != null)
+                ? previewCanvas.getCurrentSequence() : null;
+        int initDuration = initSeq != null ? (int)(initSeq.end() - initSeq.start()) : 1000;
+        JSlider timeSlider = new JSlider(0, Math.max(1, initDuration), 0);
+        timeSlider.setEnabled(animData.hasAnimation());
+        final boolean[] scrubbing = {false};
+        final boolean[] suppressTimeUpdate = {false};
+        timeSlider.addChangeListener(e -> {
+            if (suppressTimeUpdate[0]) return;
+            if (previewCanvas == null) return;
+            SequenceInfo seq = previewCanvas.getCurrentSequence();
+            if (seq == null) return;
+            long t = seq.start() + timeSlider.getValue();
+            timeLabel.setText(timeSlider.getValue() + " ms");
+            if (timeSlider.getValueIsAdjusting()) {
+                if (!scrubbing[0]) {
+                    scrubbing[0] = true;
+                    previewCanvas.setPlaying(false);
+                    playPauseBtn.setText("Play");
+                }
+                previewCanvas.setAnimTimeMs(t);
+            } else if (scrubbing[0]) {
+                scrubbing[0] = false;
+                previewCanvas.setAnimTimeMs(t);
+            }
+        });
+        JPanel timeRow = new JPanel(new BorderLayout(6, 0));
+        timeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        timeRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+        timeRow.add(new JLabel("Time:"), BorderLayout.WEST);
+        timeRow.add(timeSlider, BorderLayout.CENTER);
+        timeRow.add(timeLabel, BorderLayout.EAST);
+        panel.add(timeRow);
+        panel.add(Box.createVerticalStrut(4));
+
+        // Timer to sync scrubber position with playback
+        scrubberSyncTimer = new Timer(33, e -> {
+            if (previewCanvas == null || scrubbing[0]) return;
+            SequenceInfo seq = previewCanvas.getCurrentSequence();
+            if (seq == null) return;
+            int pos = (int)(previewCanvas.getAnimTimeMs() - seq.start());
+            suppressTimeUpdate[0] = true;
+            timeSlider.setValue(Math.max(0, Math.min(timeSlider.getMaximum(), pos)));
+            timeLabel.setText(Math.max(0, pos) + " ms");
+            suppressTimeUpdate[0] = false;
+        });
+        scrubberSyncTimer.start();
 
         // Speed slider
         JPanel speedRow = flowRow("Speed:");
@@ -399,6 +490,14 @@ public final class ModelViewerDialog extends JDialog {
             if (previewCanvas != null) {
                 int idx = seqCombo.getSelectedIndex();
                 previewCanvas.setSequence(idx);
+                // Update scrubber range for new sequence
+                if (idx >= 0 && idx < sequences.size()) {
+                    SequenceInfo seq = sequences.get(idx);
+                    int dur = (int)(seq.end() - seq.start());
+                    timeSlider.setMaximum(Math.max(1, dur));
+                    timeSlider.setValue(0);
+                    timeLabel.setText("0 ms");
+                }
             }
         });
 
@@ -409,6 +508,14 @@ public final class ModelViewerDialog extends JDialog {
                     suppressCallback[0] = true;
                     seqCombo.setSelectedIndex(idx);
                     suppressCallback[0] = false;
+                }
+                // Update scrubber range
+                if (idx >= 0 && idx < sequences.size()) {
+                    SequenceInfo seq = sequences.get(idx);
+                    int dur = (int)(seq.end() - seq.start());
+                    timeSlider.setMaximum(Math.max(1, dur));
+                    timeSlider.setValue(0);
+                    timeLabel.setText("0 ms");
                 }
             });
         }

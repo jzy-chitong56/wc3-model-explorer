@@ -18,6 +18,8 @@ import javax.swing.JScrollPane;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JTextField;
+import javax.swing.JMenuItem;
+import javax.swing.JPopupMenu;
 import javax.swing.JToggleButton;
 import javax.swing.ListSelectionModel;
 import javax.swing.TransferHandler;
@@ -74,6 +76,8 @@ public final class MainWindow extends JFrame {
     private final JButton scanButton = new JButton("Scan");
     private final JButton refreshIndexButton = new JButton("Rescan");
     private final JButton settingsButton = new JButton("Settings…");
+    private final JToggleButton favoritesToggle = new JToggleButton("\u2606 Favorites");
+    private final JButton recentButton = new JButton("Recent");
     private final JToggleButton advancedFiltersToggle = new JToggleButton("Advanced Filters");
     private final JPanel advancedFiltersPanel = new JPanel(new GridLayout(2, 3, 8, 6));
     private final JTextField animationFilterField = new JTextField();
@@ -119,6 +123,7 @@ public final class MainWindow extends JFrame {
         browseRow.add(rootField, BorderLayout.CENTER);
 
         JPanel browseButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        browseButtons.add(recentButton);
         browseButtons.add(browseButton);
         browseButtons.add(scanButton);
         browseButtons.add(refreshIndexButton);
@@ -134,6 +139,7 @@ public final class MainWindow extends JFrame {
         filterControls.add(new JLabel("Team:"));
         filterControls.add(thumbnailTeamColorCombo);
         filterControls.add(portraitFilterCombo);
+        filterControls.add(favoritesToggle);
         filterControls.add(advancedFiltersToggle);
         filterRow.add(filterControls, BorderLayout.EAST);
         topPanel.add(filterRow, BorderLayout.SOUTH);
@@ -162,6 +168,8 @@ public final class MainWindow extends JFrame {
         scanButton.addActionListener(event -> startScan(false));
         refreshIndexButton.addActionListener(event -> startScan(true));
         settingsButton.addActionListener(event -> openSettings());
+        recentButton.addActionListener(event -> showRecentModelsPopup());
+        favoritesToggle.addActionListener(event -> applyFilter());
         rootField.addActionListener(event -> startScan(false));
         advancedFiltersToggle.addActionListener(event -> {
             advancedFiltersPanel.setVisible(advancedFiltersToggle.isSelected());
@@ -336,7 +344,9 @@ public final class MainWindow extends JFrame {
         Long minSizeBytes = parseKilobytesToBytes(minSizeKbField.getText());
         Long maxSizeBytes = parseKilobytesToBytes(maxSizeKbField.getText());
 
+        boolean showFavOnly = favoritesToggle.isSelected();
         List<ModelAsset> filtered = allAssets.stream()
+                .filter(asset -> !showFavOnly || settings.isFavorite(asset.path().toAbsolutePath().toString()))
                 .filter(asset -> needle.isEmpty() || asset.fileName().toLowerCase(Locale.ROOT).contains(needle))
                 .filter(portraitFilter::allows)
                 .filter(asset -> asset.metadata().hasAnimationContaining(animationNeedle))
@@ -408,6 +418,38 @@ public final class MainWindow extends JFrame {
         javax.swing.JMenuItem copyFileItem = new javax.swing.JMenuItem(multiple ? "Copy Files" : "Copy File");
         copyFileItem.addActionListener(e -> copyAssetFilesToClipboard(assets));
         popup.add(copyFileItem);
+
+        // Open file location
+        if (!multiple) {
+            JMenuItem openLocItem = new JMenuItem("Open File Location");
+            openLocItem.addActionListener(e -> {
+                try {
+                    java.awt.Desktop.getDesktop().open(assets.get(0).path().getParent().toFile());
+                } catch (Exception ex) {
+                    // Fallback for systems where Desktop.open doesn't work
+                    try {
+                        new ProcessBuilder("explorer", "/select,", assets.get(0).path().toAbsolutePath().toString()).start();
+                    } catch (Exception ignored) {}
+                }
+            });
+            popup.add(openLocItem);
+        }
+
+        // Toggle favorite
+        if (!multiple) {
+            ModelAsset singleAsset = assets.get(0);
+            String absPath = singleAsset.path().toAbsolutePath().toString();
+            boolean isFav = settings.isFavorite(absPath);
+            JMenuItem favItem = new JMenuItem(isFav ? "\u2605 Remove Favorite" : "\u2606 Add Favorite");
+            favItem.addActionListener(e -> {
+                settings.toggleFavorite(absPath);
+                settings.save();
+                assetList.repaint();
+                if (favoritesToggle.isSelected()) applyFilter();
+            });
+            popup.add(favItem);
+            popup.addSeparator();
+        }
 
         // External programs
         List<ExternalProgram> programs = settings.externalPrograms();
@@ -538,9 +580,46 @@ public final class MainWindow extends JFrame {
         if (!rootText.isEmpty()) {
             try { scanRoot = Path.of(rootText); } catch (InvalidPathException ignored) {}
         }
+        // Record as recent
+        settings.addRecentModel(asset.path().toAbsolutePath().toString());
+        settings.save();
+
         ModelViewerDialog dialog = new ModelViewerDialog(this, asset, scanRoot);
         dialog.setLocationRelativeTo(this);
         dialog.setVisible(true);
+    }
+
+    private void showRecentModelsPopup() {
+        List<String> recent = settings.recentModels();
+        if (recent.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No recent models yet.", "Recent Models", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JPopupMenu popup = new JPopupMenu();
+        for (String absPath : recent) {
+            Path p = Path.of(absPath);
+            String name = p.getFileName().toString();
+            JMenuItem item = new JMenuItem(name);
+            item.setToolTipText(absPath);
+            item.addActionListener(e -> {
+                try {
+                    if (!java.nio.file.Files.exists(p)) {
+                        JOptionPane.showMessageDialog(this, "File not found:\n" + absPath,
+                                "Error", JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+                    long size = java.nio.file.Files.size(p);
+                    ModelMetadata meta = ModelMetadataExtractor.extract(p);
+                    ModelAsset asset = new ModelAsset(p, size, meta);
+                    showModelDetails(asset);
+                } catch (Exception ex) {
+                    JOptionPane.showMessageDialog(this, "Failed to open model:\n" + ex.getMessage(),
+                            "Error", JOptionPane.ERROR_MESSAGE);
+                }
+            });
+            popup.add(item);
+        }
+        popup.show(recentButton, 0, recentButton.getHeight());
     }
 
     private void renderAssetsProgressively(List<ModelAsset> filtered) {
@@ -756,6 +835,7 @@ public final class MainWindow extends JFrame {
         private final ShimmerPreviewLabel previewLabel = new ShimmerPreviewLabel();
         private final JLabel titleLabel = new JLabel();
         private final JLabel metaLabel = new JLabel();
+        private final JLabel starLabel = new JLabel();
 
         private AssetCellRenderer() {
             panel.setLayout(new BorderLayout(0, 8));
@@ -775,12 +855,19 @@ public final class MainWindow extends JFrame {
             metaLabel.setFont(metaLabel.getFont().deriveFont(11f));
             metaLabel.setForeground(new Color(104, 112, 124));
 
-            JPanel bottomPanel = new JPanel();
-            bottomPanel.setLayout(new javax.swing.BoxLayout(bottomPanel, javax.swing.BoxLayout.Y_AXIS));
+            starLabel.setFont(starLabel.getFont().deriveFont(Font.BOLD, 16f));
+            starLabel.setForeground(new Color(255, 200, 50));
+
+            JPanel bottomPanel = new JPanel(new BorderLayout(4, 0));
             bottomPanel.setOpaque(false);
-            bottomPanel.add(titleLabel);
-            bottomPanel.add(javax.swing.Box.createVerticalStrut(2));
-            bottomPanel.add(metaLabel);
+            JPanel textPanel = new JPanel();
+            textPanel.setLayout(new javax.swing.BoxLayout(textPanel, javax.swing.BoxLayout.Y_AXIS));
+            textPanel.setOpaque(false);
+            textPanel.add(titleLabel);
+            textPanel.add(javax.swing.Box.createVerticalStrut(2));
+            textPanel.add(metaLabel);
+            bottomPanel.add(textPanel, BorderLayout.CENTER);
+            bottomPanel.add(starLabel, BorderLayout.EAST);
             panel.add(bottomPanel, BorderLayout.SOUTH);
         }
 
@@ -798,6 +885,8 @@ public final class MainWindow extends JFrame {
             panel.setPreferredSize(new Dimension(cellWidth, previewSize + 82));
 
             if (value instanceof ModelAsset asset) {
+                boolean isFav = settings.isFavorite(asset.path().toAbsolutePath().toString());
+                starLabel.setText(isFav ? "\u2605" : "");
                 NumberFormat format = NumberFormat.getIntegerInstance();
                 titleLabel.setText(asset.fileName());
                 String polygonInfo = asset.metadata().hasKnownPolygonCount()

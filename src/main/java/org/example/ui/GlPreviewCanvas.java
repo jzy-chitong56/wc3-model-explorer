@@ -99,6 +99,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private int collisionVao = 0, collisionVbo = 0, collisionLineCount = 0;
     private int boneVao = 0, boneVbo = 0;
 
+    // Screenshot request (volatile: written from EDT, completed on render thread)
+    private volatile java.util.concurrent.CompletableFuture<BufferedImage> screenshotRequest;
+
     // Animation (volatile: written from EDT, read from render thread)
     private volatile int     currentSeqIdx = -1;
     private volatile boolean animPlaying   = false;
@@ -599,6 +602,31 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             glBindVertexArray(0);
             glUseProgram(0);
+        }
+
+        // Screenshot capture (if requested)
+        var ssReq = screenshotRequest;
+        if (ssReq != null) {
+            screenshotRequest = null;
+            try {
+                int sw = getWidth(), sh = getHeight();
+                ByteBuffer pixelBuf = ByteBuffer.allocateDirect(sw * sh * 4).order(java.nio.ByteOrder.nativeOrder());
+                glReadPixels(0, 0, sw, sh, GL_RGBA, GL_UNSIGNED_BYTE, pixelBuf);
+                BufferedImage img = new BufferedImage(sw, sh, BufferedImage.TYPE_INT_ARGB);
+                for (int y = 0; y < sh; y++) {
+                    for (int x = 0; x < sw; x++) {
+                        int srcIdx = ((sh - 1 - y) * sw + x) * 4;
+                        int r = pixelBuf.get(srcIdx) & 0xFF;
+                        int g = pixelBuf.get(srcIdx + 1) & 0xFF;
+                        int b = pixelBuf.get(srcIdx + 2) & 0xFF;
+                        int a = pixelBuf.get(srcIdx + 3) & 0xFF;
+                        img.setRGB(x, y, (a << 24) | (r << 16) | (g << 8) | b);
+                    }
+                }
+                ssReq.complete(img);
+            } catch (Exception ex) {
+                ssReq.completeExceptionally(ex);
+            }
         }
 
         swapBuffers();
@@ -1334,6 +1362,23 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public boolean isPlaying()        { return animPlaying; }
     public void setSpeed(float s)     { animSpeed = Math.max(0.1f, s); }
     public boolean hasAnimationData() { return animData.hasAnimation(); }
+    public long getAnimTimeMs()       { return animTimeMs; }
+    public void setAnimTimeMs(long t) {
+        if (currentSeqIdx < 0 || currentSeqIdx >= animData.sequences().size()) return;
+        SequenceInfo seq = animData.sequences().get(currentSeqIdx);
+        animTimeMs = Math.max(seq.start(), Math.min(seq.end(), t));
+        lastNanoNs = 0L;
+    }
+    public SequenceInfo getCurrentSequence() {
+        if (currentSeqIdx < 0 || currentSeqIdx >= animData.sequences().size()) return null;
+        return animData.sequences().get(currentSeqIdx);
+    }
+    /** Request a screenshot. The returned future completes on the next render frame. */
+    public java.util.concurrent.CompletableFuture<BufferedImage> requestScreenshot() {
+        var future = new java.util.concurrent.CompletableFuture<BufferedImage>();
+        screenshotRequest = future;
+        return future;
+    }
     public void setLooping(boolean l)          { animLooping = l; }
     private volatile Runnable onAnimationFinished;
     public void setOnAnimationFinished(Runnable r) { onAnimationFinished = r; }
