@@ -6,11 +6,15 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public final class ModelScanner {
@@ -20,10 +24,18 @@ public final class ModelScanner {
     }
 
     public static List<ModelAsset> scan(Path root) throws IOException {
-        return scan(root, false);
+        return scan(root, false, null);
     }
 
     public static List<ModelAsset> scan(Path root, boolean forceRefresh) throws IOException {
+        return scan(root, forceRefresh, null);
+    }
+
+    /**
+     * @param progressCallback called with (current, total) as each model is parsed; may be null
+     */
+    public static List<ModelAsset> scan(Path root, boolean forceRefresh,
+                                        BiConsumer<Integer, Integer> progressCallback) throws IOException {
         if (root == null || !Files.exists(root) || !Files.isDirectory(root)) {
             return List.of();
         }
@@ -37,18 +49,32 @@ public final class ModelScanner {
             ReterasModelParser.clearCache();
         }
 
-        List<ModelAsset> results = new ArrayList<>();
+        // Phase 1: collect file paths (fast — no parsing)
+        List<Path> modelFiles;
         try (Stream<Path> stream = Files.walk(normalizedRoot)) {
-            stream.filter(Files::isRegularFile)
+            modelFiles = stream.filter(Files::isRegularFile)
                     .filter(ModelScanner::isModelFile)
-                    .forEach(path -> {
-                        try {
-                            results.add(new ModelAsset(path, Files.size(path), ModelMetadataExtractor.extract(path)));
-                        } catch (IOException ignored) {
-                            // Skip unreadable files.
-                        }
-                    });
+                    .collect(Collectors.toList());
         }
+
+        int total = modelFiles.size();
+
+        // Phase 2: parse metadata in parallel with progress reporting
+        AtomicInteger counter = new AtomicInteger(0);
+        List<ModelAsset> results = Collections.synchronizedList(new ArrayList<>(total));
+        modelFiles.parallelStream().forEach(path -> {
+            try {
+                ModelMetadata meta = ModelMetadataExtractor.extract(path);
+                results.add(new ModelAsset(path, Files.size(path), meta));
+            } catch (Exception ignored) {
+                // Skip unreadable files.
+            }
+            int done = counter.incrementAndGet();
+            if (progressCallback != null) {
+                progressCallback.accept(done, total);
+            }
+        });
+
         results.sort(Comparator.comparing(ModelAsset::fileName, String.CASE_INSENSITIVE_ORDER));
         List<ModelAsset> immutableResults = List.copyOf(results);
         CACHE.put(normalizedRoot, immutableResults);

@@ -285,10 +285,20 @@ public final class MainWindow extends JFrame {
             if (forceRefresh) thumbnailRenderer.clearCache();
         }
 
-        SwingWorker<List<ModelAsset>, Void> worker = new SwingWorker<>() {
+        SwingWorker<List<ModelAsset>, String> worker = new SwingWorker<>() {
             @Override
             protected List<ModelAsset> doInBackground() throws Exception {
-                return ModelScanner.scan(root, forceRefresh);
+                return ModelScanner.scan(root, forceRefresh, (done, total) -> {
+                    // Throttle UI updates to avoid EDT flooding
+                    if (done % 5 == 0 || done == total) {
+                        publish("Parsing models... " + done + " / " + total);
+                    }
+                });
+            }
+
+            @Override
+            protected void process(java.util.List<String> chunks) {
+                statusLabel.setText(chunks.get(chunks.size() - 1));
             }
 
             @Override
@@ -575,11 +585,7 @@ public final class MainWindow extends JFrame {
                     });
                 }
             }
-            statusLabel.setText(String.format(
-                    "Showing %d / %d model files",
-                    listModel.getSize(),
-                    allAssets.size()
-            ));
+            updateStatusLabel();
             if (index[0] >= filtered.size()) {
                 stopProgressiveLoader();
             }
@@ -624,14 +630,20 @@ public final class MainWindow extends JFrame {
 
     private void stopShimmerTimer() {
         if (shimmerTimer != null && shimmerTimer.isRunning()) shimmerTimer.stop();
-        statusLabel.setText(String.format("Showing %d / %d model files",
-                listModel.getSize(), allAssets.size()));
+        updateStatusLabel();
     }
 
     private void updateThumbnailProgress() {
-        int done = totalThumbnails - pendingThumbnails;
-        statusLabel.setText(String.format("Showing %d / %d model files — Thumbnails: %d / %d",
-                listModel.getSize(), allAssets.size(), done, totalThumbnails));
+        updateStatusLabel();
+    }
+
+    private void updateStatusLabel() {
+        String text = String.format("Showing %d / %d model files", listModel.getSize(), allAssets.size());
+        if (totalThumbnails > 0 && pendingThumbnails > 0) {
+            int done = totalThumbnails - pendingThumbnails;
+            text += String.format(" — Thumbnails: %d / %d", done, totalThumbnails);
+        }
+        statusLabel.setText(text);
     }
 
     private void stopProgressiveLoader() {

@@ -9,13 +9,18 @@ import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.awt.AWTGLCanvas;
 import org.lwjgl.opengl.awt.GLData;
 
+import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -64,6 +69,9 @@ public final class ThumbnailRenderer {
     private final ConcurrentHashMap<Path, BufferedImage> cache = new ConcurrentHashMap<>();
 
     private volatile boolean running = true;
+
+    // Disk cache directory (~/.wc3-model-explorer/thumbcache/)
+    private static final Path DISK_CACHE_DIR = resolveDiskCacheDir();
 
     // Current request being processed (set by GL thread, read by paintGL)
     private volatile ThumbnailRequest currentRequest;
@@ -136,9 +144,10 @@ public final class ThumbnailRenderer {
         queue.clear();
     }
 
-    /** Clear the thumbnail cache (e.g. on rescan). */
+    /** Clear the in-memory and disk thumbnail cache (e.g. on rescan). */
     public void clearCache() {
         cache.clear();
+        clearDiskCache();
     }
 
     public void setCameraAngles(float yaw, float pitch) {
@@ -182,6 +191,16 @@ public final class ThumbnailRenderer {
         });
     }
 
+    /** Clear disk thumbnail cache. */
+    public void clearDiskCache() {
+        if (DISK_CACHE_DIR == null) return;
+        try (var files = Files.list(DISK_CACHE_DIR)) {
+            files.filter(p -> p.toString().endsWith(".png")).forEach(p -> {
+                try { Files.deleteIfExists(p); } catch (IOException ignored) {}
+            });
+        } catch (IOException ignored) {}
+    }
+
     // ── GL thread ────────────────────────────────────────────────────────────
 
     private void processQueue() {
@@ -198,6 +217,14 @@ public final class ThumbnailRenderer {
             if (req == ThumbnailRequest.POISON) break;
             if (req.generation() != generation.get()) continue; // stale
 
+            // Try loading from disk cache first
+            BufferedImage diskCached = loadFromDiskCache(req.asset().path());
+            if (diskCached != null && req.generation() == generation.get()) {
+                cache.put(req.asset().path(), diskCached);
+                SwingUtilities.invokeLater(() -> req.callback().accept(diskCached));
+                continue;
+            }
+
             try {
                 // Set the request and trigger paintGL via canvas.render()
                 currentRequest = req;
@@ -210,6 +237,7 @@ public final class ThumbnailRenderer {
 
                 if (thumb != null && req.generation() == generation.get()) {
                     cache.put(req.asset().path(), thumb);
+                    saveToDiskCache(req.asset().path(), thumb);
                     SwingUtilities.invokeLater(() -> req.callback().accept(thumb));
                 }
             } catch (Exception ex) {
@@ -738,6 +766,54 @@ public final class ThumbnailRenderer {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glBindTexture(GL_TEXTURE_2D, 0);
         return tex;
+    }
+
+    // ── Disk cache ────────────────────────────────────────────────────────────
+
+    private static Path resolveDiskCacheDir() {
+        try {
+            Path dir = Path.of(System.getProperty("user.home"), ".wc3-model-explorer", "thumbcache");
+            Files.createDirectories(dir);
+            return dir;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Path diskCachePath(Path modelPath) {
+        if (DISK_CACHE_DIR == null) return null;
+        // Use hash of absolute path + file size + lastModified as cache key
+        try {
+            String key = modelPath.toAbsolutePath().toString()
+                    + "|" + Files.size(modelPath)
+                    + "|" + Files.getLastModifiedTime(modelPath).toMillis()
+                    + "|" + thumbSize;
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(key.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 16; i++) sb.append(String.format("%02x", hash[i]));
+            return DISK_CACHE_DIR.resolve(sb + ".png");
+        } catch (IOException | NoSuchAlgorithmException e) {
+            return null;
+        }
+    }
+
+    private BufferedImage loadFromDiskCache(Path modelPath) {
+        Path cachePath = diskCachePath(modelPath);
+        if (cachePath == null || !Files.exists(cachePath)) return null;
+        try {
+            return ImageIO.read(cachePath.toFile());
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private void saveToDiskCache(Path modelPath, BufferedImage img) {
+        Path cachePath = diskCachePath(modelPath);
+        if (cachePath == null) return;
+        try {
+            ImageIO.write(img, "png", cachePath.toFile());
+        } catch (IOException ignored) {}
     }
 
     // ── Request record ───────────────────────────────────────────────────────
