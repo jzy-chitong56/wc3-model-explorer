@@ -358,20 +358,48 @@ public final class ThumbnailRenderer {
             }
         }
 
-        // Sample per-geoset UV transforms at the first frame
-        float[][] geoUVTransforms = new float[geoCount][];
-        {
-            Map<Integer, TextureAnimTracks> taMap = animData.textureAnims();
+        // Sample per-layer alpha (KMTA) at the first frame
+        float[][] layerAlpha = new float[geoCount][];
+        if (!animData.layerAlpha().isEmpty()) {
             long t = thumbSeq != null ? thumbSeq.start() : 0;
             long s0 = thumbSeq != null ? thumbSeq.start() : 0;
             long s1 = thumbSeq != null ? thumbSeq.end() : 0;
             for (int i = 0; i < geoCount; i++) {
-                TextureAnimTracks ta = taMap.get(i);
-                if (ta == null || !ta.hasAnimation()) continue;
-                float[] trans = BoneAnimator.interpTrackVec3(ta.translation(), t, s0, s1, globalSeqs, 0, 0, 0);
-                float[] rot = BoneAnimator.interpTrackQuat(ta.rotation(), t, s0, s1, globalSeqs);
-                float[] scl = BoneAnimator.interpTrackVec3(ta.scale(), t, s0, s1, globalSeqs, 1, 1, 1);
-                geoUVTransforms[i] = GlPreviewCanvas.buildUVTransformMatrix(trans, rot, scl);
+                if (i >= texData.length) continue;
+                var layers = texData[i].layers();
+                layerAlpha[i] = new float[layers.size()];
+                java.util.Arrays.fill(layerAlpha[i], 1.0f);
+                for (int li = 0; li < layers.size(); li++) {
+                    AnimTrack track = animData.layerAlpha().get(ModelAnimData.layerKey(i, li));
+                    if (track != null && !track.isEmpty()) {
+                        float val = BoneAnimator.interpTrackScalar(track, t, s0, s1, globalSeqs, layers.get(li).alpha());
+                        layerAlpha[i][li] = Math.max(0f, Math.min(1f, val));
+                    } else {
+                        layerAlpha[i][li] = layers.get(li).alpha();
+                    }
+                }
+            }
+        }
+
+        // Sample per-layer UV transforms at the first frame
+        float[][][] layerUVTransforms = new float[geoCount][][];
+        {
+            Map<Long, TextureAnimTracks> taMap = animData.textureAnims();
+            long t = thumbSeq != null ? thumbSeq.start() : 0;
+            long s0 = thumbSeq != null ? thumbSeq.start() : 0;
+            long s1 = thumbSeq != null ? thumbSeq.end() : 0;
+            for (int i = 0; i < geoCount; i++) {
+                if (i >= texData.length) continue;
+                int lc = texData[i].layers().size();
+                layerUVTransforms[i] = new float[Math.max(lc, 1)][];
+                for (int li = 0; li < lc; li++) {
+                    TextureAnimTracks ta = taMap.get(ModelAnimData.layerKey(i, li));
+                    if (ta == null || !ta.hasAnimation()) continue;
+                    float[] trans = BoneAnimator.interpTrackVec3(ta.translation(), t, s0, s1, globalSeqs, 0, 0, 0);
+                    float[] rot = BoneAnimator.interpTrackQuat(ta.rotation(), t, s0, s1, globalSeqs);
+                    float[] scl = BoneAnimator.interpTrackVec3(ta.scale(), t, s0, s1, globalSeqs, 1, 1, 1);
+                    layerUVTransforms[i][li] = GlPreviewCanvas.buildUVTransformMatrix(trans, rot, scl);
+                }
             }
         }
 
@@ -526,9 +554,8 @@ public final class ThumbnailRenderer {
         for (int i = 0; i < geoCount; i++) {
             if (geoVao[i] == 0 || geoIndexCount[i] == 0) continue;
             if (geoAlpha[i] <= 0f) continue;
-            setUVTransform(geoUVTransforms, i);
             setGeosetColor(geoColor, i);
-            drawGeosetLayers(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i], true);
+            drawGeosetLayers(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i], layerAlpha, layerUVTransforms, true);
         }
 
         // Pass 2: transparent layers
@@ -537,9 +564,8 @@ public final class ThumbnailRenderer {
         for (int i = 0; i < geoCount; i++) {
             if (geoVao[i] == 0 || geoIndexCount[i] == 0) continue;
             if (geoAlpha[i] <= 0f) continue;
-            setUVTransform(geoUVTransforms, i);
             setGeosetColor(geoColor, i);
-            drawGeosetLayers(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i], false);
+            drawGeosetLayers(i, geoVao, geoIndexCount, geoTex, texData, geoAlpha[i], layerAlpha, layerUVTransforms, false);
         }
         glDepthMask(true);
         glDisable(GL_BLEND);
@@ -592,9 +618,13 @@ public final class ThumbnailRenderer {
 
     private static final float[] IDENTITY_4X4 = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 
-    private void setUVTransform(float[][] geoUVTransforms, int gi) {
+    private void setUVTransform(float[][][] layerUVXforms, int gi, int li) {
         if (texUVTransformLoc < 0) return;
-        float[] m = (gi < geoUVTransforms.length) ? geoUVTransforms[gi] : null;
+        float[] m = null;
+        if (layerUVXforms != null && gi < layerUVXforms.length
+                && layerUVXforms[gi] != null && li < layerUVXforms[gi].length) {
+            m = layerUVXforms[gi][li];
+        }
         glUniformMatrix4fv(texUVTransformLoc, false, m != null ? m : IDENTITY_4X4);
     }
 
@@ -609,7 +639,8 @@ public final class ThumbnailRenderer {
     }
 
     private void drawGeosetLayers(int gi, int[] geoVao, int[] geoIndexCount, int[][] geoTex,
-                                    GeosetTexData[] texData, float geoAlpha, boolean opaquePass) {
+                                    GeosetTexData[] texData, float geoAlpha, float[][] layerAlphaArr,
+                                    float[][][] layerUVXforms, boolean opaquePass) {
         if (geoTex[gi] == null) return;
         var layers = texData[gi].layers();
         int layerCount = geoTex[gi].length;
@@ -620,6 +651,7 @@ public final class ThumbnailRenderer {
             if (opaquePass != isOpaque) return;
             if (!opaquePass) GlPreviewCanvas.applyBlendMode(texData[gi].filterMode());
             if (texUnshadedLoc >= 0) glUniform1i(texUnshadedLoc, 0);
+            setUVTransform(layerUVXforms, gi, 0);
             drawSingleLayer(gi, 0, texData[gi].filterMode(), 1.0f, geoVao, geoIndexCount, geoTex, geoAlpha);
             return;
         }
@@ -637,7 +669,11 @@ public final class ThumbnailRenderer {
                 }
             }
             if (texUnshadedLoc >= 0) glUniform1i(texUnshadedLoc, layer.isUnshaded() ? 1 : 0);
-            drawSingleLayer(gi, li, layer.filterMode(), layer.alpha(), geoVao, geoIndexCount, geoTex, geoAlpha);
+            setUVTransform(layerUVXforms, gi, li);
+            float la = (layerAlphaArr != null && gi < layerAlphaArr.length
+                    && layerAlphaArr[gi] != null && li < layerAlphaArr[gi].length)
+                    ? layerAlphaArr[gi][li] : layer.alpha();
+            drawSingleLayer(gi, li, layer.filterMode(), la, geoVao, geoIndexCount, geoTex, geoAlpha);
         }
     }
 

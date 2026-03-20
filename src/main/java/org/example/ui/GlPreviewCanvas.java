@@ -116,7 +116,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile boolean[] geosetVisibility; // per-geoset visibility toggle (null = all visible)
     private float[]          geosetAlphaValues; // per-geoset alpha (sampled from KGAO)
     private float[][]        geosetColorValues; // per-geoset RGB color (sampled from KGAC), null entries = white
-    private float[][]        geosetUVTransforms; // per-geoset 4x4 UV transform matrices (null = identity)
+    private float[][][]      layerUVTransforms; // [geoset][layer] 4x4 UV transform matrices (null = identity)
+    private float[][]        layerAlphaValues;  // [geosetIdx][layerIdx] — animated layer alpha (KMTA)
     private volatile Map<Integer, float[]> lastWorldMap; // cached for node names overlay
     private float lastDtSec; // delta time in seconds from last advanceAnimation()
 
@@ -414,7 +415,20 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 int gi = e.getKey();
                 if (gi < geosetColorValues.length) geosetColorValues[gi] = e.getValue().clone();
             }
-            geosetUVTransforms = new float[texData.length][];
+            layerUVTransforms = new float[texData.length][][];
+            for (int gi = 0; gi < texData.length; gi++) {
+                int lc = texData[gi].layers().size();
+                layerUVTransforms[gi] = new float[Math.max(lc, 1)][];
+            }
+            // Initialize layer alpha array: [geoset][layer] — all 1.0 by default
+            if (!animData.layerAlpha().isEmpty()) {
+                layerAlphaValues = new float[texData.length][];
+                for (int gi = 0; gi < texData.length; gi++) {
+                    int layerCount = texData[gi].layers().size();
+                    layerAlphaValues[gi] = new float[layerCount];
+                    java.util.Arrays.fill(layerAlphaValues[gi], 1.0f);
+                }
+            }
             buildExtentVao();
             buildCollisionVao();
             buildBoneVao();
@@ -480,10 +494,12 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 }
                 sampleGeosetAlpha();
                 sampleGeosetColor();
+                sampleLayerAlpha();
                 sampleTextureAnims();
                 simulateRibbons(lastDtSec);
             } else {
-                // Even without a selected sequence, global texture animations should run
+                // Even without a selected sequence, global animations should run
+                sampleLayerAlpha();
                 sampleTextureAnims();
             }
             if (shadingMode == ShadingMode.GEOSET_COLORS && solidShader != 0 && geoVao != null) {
@@ -861,9 +877,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             if (!geosetVisible(gi)) continue;
             float geoAlpha = geosetAlpha(gi);
             if (geoAlpha <= 0f) continue;
-            setUVTransformUniform(uvTransformLoc, gi);
             setGeosetColorUniform(geosetColorLoc, gi);
-            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, unshadedLoc, geoAlpha, true);
+            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, uvTransformLoc, unshadedLoc, geoAlpha, true);
         }
 
         // Pass 2: transparent layers
@@ -874,9 +889,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             if (!geosetVisible(gi)) continue;
             float geoAlpha = geosetAlpha(gi);
             if (geoAlpha <= 0f) continue;
-            setUVTransformUniform(uvTransformLoc, gi);
             setGeosetColorUniform(geosetColorLoc, gi);
-            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, unshadedLoc, geoAlpha, false);
+            drawGeosetLayers(gi, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, uvTransformLoc, unshadedLoc, geoAlpha, false);
         }
         glDepthMask(true);
         glDisable(GL_BLEND);
@@ -888,10 +902,13 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glUseProgram(0);
     }
 
-    private void setUVTransformUniform(int loc, int gi) {
+    private void setUVTransformUniform(int loc, int gi, int li) {
         if (loc < 0) return;
-        float[] m = (geosetUVTransforms != null && gi < geosetUVTransforms.length)
-                ? geosetUVTransforms[gi] : null;
+        float[] m = null;
+        if (layerUVTransforms != null && gi < layerUVTransforms.length
+                && layerUVTransforms[gi] != null && li < layerUVTransforms[gi].length) {
+            m = layerUVTransforms[gi][li];
+        }
         glUniformMatrix4fv(loc, false, m != null ? m : IDENTITY_4X4);
     }
 
@@ -920,7 +937,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
      * @param opaquePass true = draw opaque layers only, false = draw transparent layers only
      */
     private void drawGeosetLayers(int gi, int samplerLoc, int hasTexLoc, int alphaThreshLoc,
-                                   int alphaLoc, int unshadedLoc, float geoAlpha, boolean opaquePass) {
+                                   int alphaLoc, int uvTransformLoc, int unshadedLoc, float geoAlpha, boolean opaquePass) {
         if (geoTex == null || gi >= geoTex.length || geoTex[gi] == null) return;
         var layers = (gi < texData.length) ? texData[gi].layers() : java.util.List.<GeosetTexData.LayerTexData>of();
         int layerCount = geoTex[gi].length;
@@ -931,6 +948,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             if (opaquePass != isOpaque) return;
             if (!opaquePass) applyBlendMode(texData[gi].filterMode());
             if (unshadedLoc >= 0) glUniform1i(unshadedLoc, 0);
+            setUVTransformUniform(uvTransformLoc, gi, 0);
             drawSingleLayer(gi, 0, texData[gi].filterMode(), 1.0f, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha);
             return;
         }
@@ -956,6 +974,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             // Unshaded flag per layer
             if (unshadedLoc >= 0) glUniform1i(unshadedLoc, layer.isUnshaded() ? 1 : 0);
 
+            // UV transform per layer (only the layer with a texture animation gets transformed)
+            setUVTransformUniform(uvTransformLoc, gi, li);
+
             // Swap UV VBO if this layer uses a different coord set
             if (geoLayerUvVbo != null && gi < geoLayerUvVbo.length
                     && geoLayerUvVbo[gi] != null && li < geoLayerUvVbo[gi].length
@@ -965,7 +986,12 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 glEnableVertexAttribArray(1);
             }
 
-            drawSingleLayer(gi, li, layer.filterMode(), layer.alpha(), samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha);
+            float layerAlpha = layer.alpha();
+            if (layerAlphaValues != null && gi < layerAlphaValues.length
+                    && li < layerAlphaValues[gi].length) {
+                layerAlpha = layerAlphaValues[gi][li];
+            }
+            drawSingleLayer(gi, li, layer.filterMode(), layerAlpha, samplerLoc, hasTexLoc, alphaThreshLoc, alphaLoc, geoAlpha);
 
             // Restore default UV VBO if we swapped
             if (geoLayerUvVbo != null && gi < geoLayerUvVbo.length
@@ -1114,6 +1140,25 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         }
     }
 
+    private void sampleLayerAlpha() {
+        if (layerAlphaValues == null) return;
+        SequenceInfo seq = animData.sequences().get(currentSeqIdx);
+        long[] globalSeqs = animData.globalSequences();
+        for (int gi = 0; gi < layerAlphaValues.length; gi++) {
+            for (int li = 0; li < layerAlphaValues[gi].length; li++) {
+                AnimTrack track = animData.layerAlpha().get(ModelAnimData.layerKey(gi, li));
+                if (track != null && !track.isEmpty()) {
+                    if (track.isGlobal() || hasKeysInRange(track, seq.start(), seq.end())) {
+                        float val = BoneAnimator.interpTrackScalar(track, animTimeMs, seq.start(), seq.end(), globalSeqs, 1f);
+                        layerAlphaValues[gi][li] = Math.max(0f, Math.min(1f, val));
+                    } else {
+                        layerAlphaValues[gi][li] = 1.0f;
+                    }
+                }
+            }
+        }
+    }
+
     private void sampleGeosetColor() {
         if (geosetColorValues == null) return;
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
@@ -1134,38 +1179,41 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     }
 
     private void sampleTextureAnims() {
-        if (geosetUVTransforms == null) return;
-        Map<Integer, TextureAnimTracks> taMap = animData.textureAnims();
+        if (layerUVTransforms == null) return;
+        Map<Long, TextureAnimTracks> taMap = animData.textureAnims();
         long[] globalSeqs = animData.globalSequences();
-        for (int gi = 0; gi < geosetUVTransforms.length; gi++) {
-            TextureAnimTracks ta = taMap.get(gi);
-            if (ta == null || !ta.hasAnimation()) {
-                geosetUVTransforms[gi] = null; // identity
-                continue;
-            }
-
-            // Determine time for non-global tracks
-            long t;
-            long s0, s1;
-            if (currentSeqIdx >= 0 && currentSeqIdx < animData.sequences().size()) {
-                SequenceInfo seq = animData.sequences().get(currentSeqIdx);
-                t = animTimeMs;
-                s0 = seq.start();
-                s1 = seq.end();
-            } else {
-                // No sequence selected — only global tracks can animate
-                if (ta.globalSequenceId() < 0) {
-                    geosetUVTransforms[gi] = null;
+        for (int gi = 0; gi < layerUVTransforms.length; gi++) {
+            if (layerUVTransforms[gi] == null) continue;
+            for (int li = 0; li < layerUVTransforms[gi].length; li++) {
+                TextureAnimTracks ta = taMap.get(ModelAnimData.layerKey(gi, li));
+                if (ta == null || !ta.hasAnimation()) {
+                    layerUVTransforms[gi][li] = null; // identity
                     continue;
                 }
-                t = 0; s0 = 0; s1 = 0;
-            }
 
-            // interpTrack* auto-dispatches to cyclic for global sequence tracks
-            float[] trans = BoneAnimator.interpTrackVec3(ta.translation(), t, s0, s1, globalSeqs, 0, 0, 0);
-            float[] rot = BoneAnimator.interpTrackQuat(ta.rotation(), t, s0, s1, globalSeqs);
-            float[] scl = BoneAnimator.interpTrackVec3(ta.scale(), t, s0, s1, globalSeqs, 1, 1, 1);
-            geosetUVTransforms[gi] = buildUVTransformMatrix(trans, rot, scl);
+                // Determine time for non-global tracks
+                long t;
+                long s0, s1;
+                if (currentSeqIdx >= 0 && currentSeqIdx < animData.sequences().size()) {
+                    SequenceInfo seq = animData.sequences().get(currentSeqIdx);
+                    t = animTimeMs;
+                    s0 = seq.start();
+                    s1 = seq.end();
+                } else {
+                    // No sequence selected — only global tracks can animate
+                    if (ta.globalSequenceId() < 0) {
+                        layerUVTransforms[gi][li] = null;
+                        continue;
+                    }
+                    t = 0; s0 = 0; s1 = 0;
+                }
+
+                // interpTrack* auto-dispatches to cyclic for global sequence tracks
+                float[] trans = BoneAnimator.interpTrackVec3(ta.translation(), t, s0, s1, globalSeqs, 0, 0, 0);
+                float[] rot = BoneAnimator.interpTrackQuat(ta.rotation(), t, s0, s1, globalSeqs);
+                float[] scl = BoneAnimator.interpTrackVec3(ta.scale(), t, s0, s1, globalSeqs, 1, 1, 1);
+                layerUVTransforms[gi][li] = buildUVTransformMatrix(trans, rot, scl);
+            }
         }
     }
 

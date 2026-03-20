@@ -404,8 +404,8 @@ public final class ReterasModelParser {
         // Texture animations (KTAT/KTAR/KTAS) — indexed by textureAnimationId
         TextureAnimTracks[] texAnimArray = extractTextureAnims(model);
 
-        // Map geoset → texture animation via material layer's textureAnimationId
-        Map<Integer, TextureAnimTracks> textureAnims = new HashMap<>();
+        // Map geoset+layer → texture animation via material layer's textureAnimationId
+        Map<Long, TextureAnimTracks> textureAnims = new HashMap<>();
         meshIdx = 0;
         for (int oi = 0; oi < model.geosets.size(); oi++) {
             MdlxGeoset g = model.geosets.get(oi);
@@ -416,13 +416,39 @@ public final class ReterasModelParser {
             if (matId < 0 || matId >= model.materials.size()) continue;
             MdlxMaterial mat = model.materials.get(matId);
             if (mat == null) continue;
-            // Use the first layer that references a texture animation
-            for (MdlxLayer layer : mat.layers) {
+            for (int li = 0; li < mat.layers.size(); li++) {
+                MdlxLayer layer = mat.layers.get(li);
                 if (layer == null) continue;
                 int taId = layer.textureAnimationId;
                 if (taId >= 0 && taId < texAnimArray.length && texAnimArray[taId].hasAnimation()) {
-                    textureAnims.put(mi, texAnimArray[taId]);
-                    break;
+                    textureAnims.put(ModelAnimData.layerKey(mi, li), texAnimArray[taId]);
+                }
+            }
+        }
+
+        // Layer alpha animations (KMTA) — per geoset × layer
+        Map<Long, AnimTrack> layerAlpha = new HashMap<>();
+        meshIdx = 0;
+        for (int oi = 0; oi < model.geosets.size(); oi++) {
+            MdlxGeoset g = model.geosets.get(oi);
+            if (g == null || g.vertices == null || g.faces == null
+                    || g.vertices.length < 3 || g.faces.length < 3) continue;
+            int mi = meshIdx++;
+            int matId = (int) g.materialId;
+            if (matId < 0 || matId >= model.materials.size()) continue;
+            MdlxMaterial mat = model.materials.get(matId);
+            if (mat == null) continue;
+            for (int li = 0; li < mat.layers.size(); li++) {
+                MdlxLayer layer = mat.layers.get(li);
+                if (layer == null) continue;
+                for (MdlxTimeline<?> tl : layer.timelines) {
+                    if (tl == null || tl.name == null) continue;
+                    if ("KMTA".equals(tl.name.asStringValue())) {
+                        AnimTrack track = extractTrack(tl);
+                        if (!track.isEmpty()) {
+                            layerAlpha.put(ModelAnimData.layerKey(mi, li), track);
+                        }
+                    }
                 }
             }
         }
@@ -439,7 +465,7 @@ public final class ReterasModelParser {
         return new ModelAnimData(List.copyOf(sequences), bones, List.copyOf(geosets),
                 Map.copyOf(geosetAlpha), Map.copyOf(geosetStaticAlpha),
                 Map.copyOf(geosetColor), Map.copyOf(geosetStaticColor),
-                Map.copyOf(textureAnims), globalSeqs);
+                Map.copyOf(textureAnims), Map.copyOf(layerAlpha), globalSeqs);
     }
 
     /** Extract texture animation tracks from model.textureAnimations. */
