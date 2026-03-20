@@ -78,6 +78,7 @@ public final class MainWindow extends JFrame {
     private final JButton settingsButton = new JButton("Settings…");
     private final JToggleButton favoritesToggle = new JToggleButton("\u2606 Favorites");
     private final JButton recentButton = new JButton("Recent");
+    private final JComboBox<SortOrder> sortCombo = new JComboBox<>(SortOrder.values());
     private final JToggleButton advancedFiltersToggle = new JToggleButton("Advanced Filters");
     private final JPanel advancedFiltersPanel = new JPanel(new GridLayout(2, 3, 8, 6));
     private final JTextField animationFilterField = new JTextField();
@@ -135,6 +136,8 @@ public final class MainWindow extends JFrame {
         filterRow.add(new JLabel("Search:"), BorderLayout.WEST);
         filterRow.add(searchField, BorderLayout.CENTER);
         JPanel filterControls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        filterControls.add(new JLabel("Sort:"));
+        filterControls.add(sortCombo);
         filterControls.add(thumbnailSizeCombo);
         filterControls.add(new JLabel("Team:"));
         filterControls.add(thumbnailTeamColorCombo);
@@ -176,6 +179,7 @@ public final class MainWindow extends JFrame {
             revalidate();
             repaint();
         });
+        sortCombo.addActionListener(event -> applyFilter());
         portraitFilterCombo.addActionListener(event -> {
             settings.setPortraitFilter((PortraitFilter) portraitFilterCombo.getSelectedItem());
             settings.save();
@@ -354,8 +358,14 @@ public final class MainWindow extends JFrame {
                 .filter(asset -> polygonRangeMatches(asset, minPolygons, maxPolygons))
                 .filter(asset -> minSizeBytes == null || asset.fileSizeBytes() >= minSizeBytes)
                 .filter(asset -> maxSizeBytes == null || asset.fileSizeBytes() <= maxSizeBytes)
+                .sorted(currentSortOrder().comparator())
                 .collect(Collectors.toList());
         renderAssetsProgressively(filtered);
+    }
+
+    private SortOrder currentSortOrder() {
+        SortOrder selected = (SortOrder) sortCombo.getSelectedItem();
+        return selected != null ? selected : SortOrder.NAME_ASC;
     }
 
     private void openSettings() {
