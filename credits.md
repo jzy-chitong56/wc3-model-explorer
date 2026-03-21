@@ -70,6 +70,8 @@
   - Billboard bone orientation
   - Ribbon emitter simulation: pivot-based positioning, per-particle velocity/gravity, color interpolation
   - Geoset animation (alpha, color, UV transforms)
+  - ParticleEmitter2 rendering: billboard quads, velocity-oriented tails, 3-segment lifecycle, 7-vector billboard system
+  - Node type icons (`bone.png`, `helperhand.png`, `attachment.png`, `ribbon.png`, `particle2.png`) from `res/UI/Widgets/ReteraStudio/NodeIcons/`
   - MDX v1200 format changes: [commit d865928](https://github.com/Retera/ReterasModelStudio/commit/d8659281a0f242ff79abaae0ef4e874f27b48e4c) — Light chunk `shadowIntensity` field, forward-compatible version checks (`>= 900` instead of explicit version lists)
 
 ### war3-model (4eb0da)

@@ -1028,8 +1028,40 @@ public final class ModelViewerDialog extends JDialog {
 
     // ── Nodes tab ─────────────────────────────────────────────────────────
 
+    private static final int ICON_SIZE = 16;
+    private static ImageIcon eyeEnabledIcon, eyeDisabledIcon;
+    private static ImageIcon boneIcon, helperIcon, attachmentIcon, ribbonIcon, particle2Icon;
+    static {
+        try {
+            var enabledImg = ImageIO.read(ModelViewerDialog.class.getResourceAsStream("/observer-icon-hover.png"));
+            var disabledImg = ImageIO.read(ModelViewerDialog.class.getResourceAsStream("/observer-icon-disabled.png"));
+            eyeEnabledIcon = new ImageIcon(enabledImg.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH));
+            eyeDisabledIcon = new ImageIcon(disabledImg.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH));
+        } catch (Exception ex) {
+            eyeEnabledIcon = null;
+            eyeDisabledIcon = null;
+        }
+        try {
+            boneIcon       = loadNodeIcon("/bone.png");
+            helperIcon     = loadNodeIcon("/helperhand.png");
+            attachmentIcon = loadNodeIcon("/attachment.png");
+            ribbonIcon     = loadNodeIcon("/ribbon.png");
+            particle2Icon  = loadNodeIcon("/particle2.png");
+        } catch (Exception ex) {
+            boneIcon = helperIcon = attachmentIcon = ribbonIcon = particle2Icon = null;
+        }
+    }
+
+    private static ImageIcon loadNodeIcon(String resourcePath) throws Exception {
+        var img = ImageIO.read(ModelViewerDialog.class.getResourceAsStream(resourcePath));
+        return new ImageIcon(img.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH));
+    }
+
     private JScrollPane buildNodesTab() {
         BoneNode[] bones = parsedModel.animData().bones();
+
+        // Track which emitters are enabled (by objectId)
+        Map<Integer, Boolean> emitterEnabled = new HashMap<>();
 
         // Build tree nodes indexed by objectId
         Map<Integer, DefaultMutableTreeNode> nodeMap = new HashMap<>();
@@ -1038,9 +1070,13 @@ public final class ModelViewerDialog extends JDialog {
         for (BoneNode bone : bones) {
             String label = bone.name().isEmpty()
                     ? bone.nodeType() + " #" + bone.objectId()
-                    : bone.name() + " [" + bone.nodeType() + "]";
+                    : bone.name();
             DefaultMutableTreeNode treeNode = new DefaultMutableTreeNode(new NodeEntry(bone, label));
             nodeMap.put(bone.objectId(), treeNode);
+            if (bone.nodeType() == BoneNode.NodeType.RIBBON_EMITTER
+                    || bone.nodeType() == BoneNode.NodeType.PARTICLE_EMITTER2) {
+                emitterEnabled.put(bone.objectId(), true);
+            }
         }
 
         // Build hierarchy
@@ -1056,9 +1092,17 @@ public final class ModelViewerDialog extends JDialog {
         JTree tree = new JTree(new DefaultTreeModel(root));
         tree.setRootVisible(true);
         tree.setShowsRootHandles(true);
+        tree.setRowHeight(Math.max(tree.getRowHeight(), ICON_SIZE + 4));
 
-        // Custom renderer with node type icons/colors
+        // Custom renderer: node type icon on LEFT, name in center, eye toggle on RIGHT
         tree.setCellRenderer(new DefaultTreeCellRenderer() {
+            private final JPanel panel = new JPanel(new BorderLayout(4, 0));
+            private final JLabel eyeLabel = new JLabel();
+            {
+                panel.setOpaque(false);
+                eyeLabel.setOpaque(false);
+            }
+
             @Override
             public Component getTreeCellRendererComponent(JTree tree, Object value,
                     boolean sel, boolean expanded, boolean leaf, int row, boolean hasFocus) {
@@ -1066,14 +1110,56 @@ public final class ModelViewerDialog extends JDialog {
                 if (value instanceof DefaultMutableTreeNode dmtn
                         && dmtn.getUserObject() instanceof NodeEntry entry) {
                     setText(entry.label);
-                    switch (entry.bone.nodeType()) {
-                        case BONE           -> setForeground(sel ? getForeground() : new Color(200, 150, 50));
-                        case HELPER         -> setForeground(sel ? getForeground() : new Color(180, 180, 60));
-                        case ATTACHMENT     -> setForeground(sel ? getForeground() : new Color(60, 180, 200));
-                        case RIBBON_EMITTER -> setForeground(sel ? getForeground() : new Color(200, 80, 180));
+
+                    // Node type icon on the left (replaces default tree icon)
+                    ImageIcon nodeIcon = switch (entry.bone.nodeType()) {
+                        case BONE             -> boneIcon;
+                        case HELPER           -> helperIcon;
+                        case ATTACHMENT       -> attachmentIcon;
+                        case RIBBON_EMITTER   -> ribbonIcon;
+                        case PARTICLE_EMITTER2 -> particle2Icon;
+                    };
+                    if (nodeIcon != null) setIcon(nodeIcon);
+
+                    // Eye toggle on the right for emitter nodes
+                    if (emitterEnabled.containsKey(entry.bone.objectId()) && eyeEnabledIcon != null) {
+                        boolean enabled = emitterEnabled.getOrDefault(entry.bone.objectId(), true);
+                        eyeLabel.setIcon(enabled ? eyeEnabledIcon : eyeDisabledIcon);
+                        panel.removeAll();
+                        panel.add(this, BorderLayout.CENTER);
+                        panel.add(eyeLabel, BorderLayout.EAST);
+                        return panel;
                     }
                 }
                 return this;
+            }
+        });
+
+        // Click listener: toggle emitter visibility when clicking the eye icon (right side)
+        tree.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                TreePath path = tree.getPathForLocation(e.getX(), e.getY());
+                if (path == null) return;
+                Object userObj = ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
+                if (!(userObj instanceof NodeEntry entry)) return;
+                if (!emitterEnabled.containsKey(entry.bone.objectId())) return;
+
+                // Check if click is in the eye icon area (right side of the row)
+                var bounds = tree.getPathBounds(path);
+                if (bounds == null) return;
+                int relativeX = e.getX() - bounds.x;
+                if (relativeX < bounds.width - ICON_SIZE - 8) return;
+
+                boolean nowEnabled = !emitterEnabled.get(entry.bone.objectId());
+                emitterEnabled.put(entry.bone.objectId(), nowEnabled);
+                if (previewCanvas != null) previewCanvas.setEmitterEnabled(entry.bone.objectId(), nowEnabled);
+                tree.repaint();
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                if (previewCanvas != null) previewCanvas.setHighlightedBoneId(-1);
             }
         });
 
@@ -1089,14 +1175,6 @@ public final class ModelViewerDialog extends JDialog {
                         return;
                     }
                 }
-                if (previewCanvas != null) previewCanvas.setHighlightedBoneId(-1);
-            }
-        });
-
-        // Clear highlight when mouse exits the tree
-        tree.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseExited(MouseEvent e) {
                 if (previewCanvas != null) previewCanvas.setHighlightedBoneId(-1);
             }
         });

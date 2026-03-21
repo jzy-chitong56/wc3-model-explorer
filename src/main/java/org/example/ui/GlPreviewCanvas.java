@@ -1514,6 +1514,17 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public boolean isGeosetVisible(int gi) { return geosetVisible(gi); }
     public int getGeosetCount() { return texData != null ? texData.length : 0; }
 
+    // Emitter visibility (by objectId)
+    private volatile java.util.Set<Integer> disabledEmitters; // null = all enabled
+    public void setEmitterEnabled(int objectId, boolean enabled) {
+        if (disabledEmitters == null) disabledEmitters = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        if (enabled) disabledEmitters.remove(objectId);
+        else         disabledEmitters.add(objectId);
+    }
+    public boolean isEmitterEnabled(int objectId) {
+        return disabledEmitters == null || !disabledEmitters.contains(objectId);
+    }
+
     /** Snaps the camera to the model's camera node position/target. */
     public void applyCameraView(CameraNode cam) {
         if (cam == null) return;
@@ -2613,8 +2624,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 rs.count--;
             }
 
-            // Visibility only gates emission, not aging/removal
-            float vis = interpolateScalar(rd.visibilityTrack(), seq, globalSeqs, 1f);
+            // Visibility and user toggle gate emission, not aging/removal
+            float vis = isEmitterEnabled(rd.objectId())
+                    ? interpolateScalar(rd.visibilityTrack(), seq, globalSeqs, 1f) : 0f;
 
             // Spawn new particle (at most one per frame, like WC3) — only when visible
             rs.emission += vis > 0f ? rd.emissionRate() * dt : 0f;
@@ -3022,8 +3034,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 ps.count--;
             }
 
-            // Visibility gates emission
-            float vis = interpolateScalar(pd.visibilityTrack(), seq, globalSeqs, 1f);
+            // Visibility and user toggle gate emission
+            float vis = isEmitterEnabled(pd.objectId())
+                    ? interpolateScalar(pd.visibilityTrack(), seq, globalSeqs, 1f) : 0f;
             if (vis <= 0f) { ps.emission = 0f; continue; }
 
             // Animated parameters
