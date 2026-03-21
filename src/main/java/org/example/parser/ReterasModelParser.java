@@ -8,6 +8,7 @@ import com.hiveworkshop.rms.parsers.mdlx.MdlxGeoset;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxGenericObject;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxHelper;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxAttachment;
+import com.hiveworkshop.rms.parsers.mdlx.MdlxParticleEmitter2;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxRibbonEmitter;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxGeosetAnimation;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxLayer;
@@ -74,7 +75,8 @@ public final class ReterasModelParser {
             ModelMesh mesh = buildMesh(model);
             return new ReterasParsedModel(buildMetadata(model), mesh, buildAnimData(model),
                     buildTexData(model), buildCameras(model), buildCollisionShapes(model),
-                    buildMaterials(model), buildRibbonEmitters(model));
+                    buildMaterials(model), buildRibbonEmitters(model),
+                    buildParticleEmitters2(model));
         } catch (IOException | RuntimeException ex) {
             return ReterasParsedModel.EMPTY;
         }
@@ -286,6 +288,7 @@ public final class ReterasModelParser {
         for (MdlxHelper h : model.helpers) { allNodes.add(h); nodeTypes.put(h.objectId, BoneNode.NodeType.HELPER); }
         for (MdlxAttachment a : model.attachments) { allNodes.add(a); nodeTypes.put(a.objectId, BoneNode.NodeType.ATTACHMENT); }
         for (MdlxRibbonEmitter r : model.ribbonEmitters) { allNodes.add(r); nodeTypes.put(r.objectId, BoneNode.NodeType.RIBBON_EMITTER); }
+        for (MdlxParticleEmitter2 pe2 : model.particleEmitters2) { allNodes.add(pe2); nodeTypes.put(pe2.objectId, BoneNode.NodeType.PARTICLE_EMITTER2); }
         allNodes.sort((a, b) -> Integer.compare(a.objectId, b.objectId));
 
         List<float[]> pivots = model.pivotPoints;
@@ -642,6 +645,92 @@ public final class ReterasModelParser {
                     colorTrack, visibilityTrack, texSlotTrack));
         }
         return result.toArray(new RibbonEmitterData[0]);
+    }
+
+    // ── Particle emitters 2 ─────────────────────────────────────────────────
+
+    private static ParticleEmitter2Data[] buildParticleEmitters2(MdlxModel model) {
+        if (model.particleEmitters2 == null || model.particleEmitters2.isEmpty())
+            return ParticleEmitter2Data.EMPTY_ARRAY;
+
+        // Texture path lookup
+        List<String> texturePaths = new ArrayList<>();
+        for (MdlxTexture t : model.textures) {
+            texturePaths.add(t != null && t.path != null ? t.path.trim() : "");
+        }
+
+        List<ParticleEmitter2Data> result = new ArrayList<>();
+        for (MdlxParticleEmitter2 pe2 : model.particleEmitters2) {
+            if (pe2 == null) continue;
+
+            AnimTrack speedTrack      = AnimTrack.EMPTY;
+            AnimTrack variationTrack  = AnimTrack.EMPTY;
+            AnimTrack latitudeTrack   = AnimTrack.EMPTY;
+            AnimTrack gravityTrack    = AnimTrack.EMPTY;
+            AnimTrack emissionTrack   = AnimTrack.EMPTY;
+            AnimTrack widthTrack      = AnimTrack.EMPTY;
+            AnimTrack lengthTrack     = AnimTrack.EMPTY;
+            AnimTrack visibilityTrack = AnimTrack.EMPTY;
+
+            for (MdlxTimeline<?> tl : pe2.timelines) {
+                if (tl == null || tl.name == null) continue;
+                String tag = tl.name.asStringValue();
+                AnimTrack extracted = extractTrack(tl);
+                switch (tag) {
+                    case "KP2S" -> speedTrack      = extracted;
+                    case "KP2R" -> variationTrack  = extracted;
+                    case "KP2L" -> latitudeTrack   = extracted;
+                    case "KP2G" -> gravityTrack    = extracted;
+                    case "KP2E" -> emissionTrack   = extracted;
+                    case "KP2W" -> widthTrack      = extracted;
+                    case "KP2N" -> lengthTrack     = extracted;
+                    case "KP2V" -> visibilityTrack = extracted;
+                }
+            }
+
+            // Resolve texture path
+            String texPath = "";
+            int texId = pe2.textureId;
+            int replId = 0;
+            if (texId >= 0 && texId < model.textures.size()) {
+                MdlxTexture tex = model.textures.get(texId);
+                if (tex != null) {
+                    replId = tex.replaceableId;
+                    if (texId < texturePaths.size()) texPath = texturePaths.get(texId);
+                }
+            }
+
+            // Clone segment arrays
+            float[][] segColors = new float[3][];
+            for (int i = 0; i < 3; i++) {
+                segColors[i] = pe2.segmentColors[i] != null ? pe2.segmentColors[i].clone() : new float[]{1f, 1f, 1f};
+            }
+            short[] segAlphas = pe2.segmentAlphas != null ? pe2.segmentAlphas.clone() : new short[]{255, 255, 255};
+            float[] segScaling = pe2.segmentScaling != null ? pe2.segmentScaling.clone() : new float[]{1f, 1f, 1f};
+            long[][] headInt = new long[2][];
+            long[][] tailInt = new long[2][];
+            for (int i = 0; i < 2; i++) {
+                headInt[i] = pe2.headIntervals[i] != null ? pe2.headIntervals[i].clone() : new long[3];
+                tailInt[i] = pe2.tailIntervals[i] != null ? pe2.tailIntervals[i].clone() : new long[3];
+            }
+
+            result.add(new ParticleEmitter2Data(
+                    pe2.objectId, texId,
+                    pe2.filterMode != null ? pe2.filterMode.ordinal() : 0,
+                    pe2.flags,
+                    pe2.speed, pe2.variation, pe2.latitude, pe2.gravity,
+                    pe2.lifeSpan, pe2.emissionRate,
+                    pe2.width, pe2.length,
+                    pe2.tailLength, pe2.timeMiddle,
+                    pe2.headTailFlag,
+                    (int) pe2.rows, (int) pe2.columns,
+                    (int) pe2.squirt, pe2.priorityPlane, replId,
+                    segColors, segAlphas, segScaling,
+                    headInt, tailInt, texPath,
+                    speedTrack, variationTrack, latitudeTrack, gravityTrack,
+                    emissionTrack, widthTrack, lengthTrack, visibilityTrack));
+        }
+        return result.toArray(new ParticleEmitter2Data[0]);
     }
 
     // ── Utility ──────────────────────────────────────────────────────────────

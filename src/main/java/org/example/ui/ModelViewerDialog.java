@@ -58,7 +58,8 @@ public final class ModelViewerDialog extends JDialog {
             createdCanvas = new GlPreviewCanvas(
                     parsedModel.mesh(), parsedModel.animData(),
                     parsedModel.texData(), parsedModel.collisionShapes(),
-                    parsedModel.ribbonEmitters(), parsedModel.materials(),
+                    parsedModel.ribbonEmitters(), parsedModel.particleEmitters2(),
+                    parsedModel.materials(),
                     asset.path().getParent(), scanRoot);
         } catch (Throwable t) {
             System.err.println("[ModelViewer] GlPreviewCanvas failed: " + t);

@@ -80,6 +80,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private int litShader   = 0, litMvp   = -1, litMvLoc = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1, litGeosetColor = -1, litUnshaded = -1;
     private int normalsShader = 0, normalsMvp = -1, normalsMvLoc = -1;
     private int ribbonShader = 0, ribbonMvp = -1, ribbonSampler = -1, ribbonHasTex = -1, ribbonAlphaU = -1;
+    private int particle2Shader = 0, particle2Mvp = -1, particle2Sampler = -1, particle2HasTex = -1;
 
     private int gridVao = 0, gridVbo = 0, gridVertexCount = 0;
 
@@ -128,6 +129,14 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private int[] ribbonFilterModes;        // filter mode per ribbon emitter (from material layer)
     private static final int RIBBON_MAX_VERTS = 60000; // max vertices across all ribbons
     private static final int RIBBON_FLOATS_PER_VERT = 8; // x,y,z, u,v, r,g,b
+
+    // ── Particle Emitter 2 runtime state ────────────────────────────────────
+    private ParticleEmitter2Data[] particleEmitters2 = ParticleEmitter2Data.EMPTY_ARRAY;
+    private Particle2State[] particle2States;
+    private int particle2Vao, particle2Vbo;
+    private int[] particle2Textures;
+    private static final int P2_MAX_VERTS = 120000;
+    private static final int P2_FLOATS_PER_VERT = 9; // x,y,z, u,v, r,g,b, a
 
     // Node names GL overlay (rendered as textured fullscreen quad)
     private int nodeNamesQuadVao, nodeNamesQuadVbo, nodeNamesTex;
@@ -265,6 +274,34 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "}\n";
 
     // Ribbon shader: position + UV + vertex color, textured with alpha blending
+    // ── Particle Emitter 2 shader ──────────────────────────────────────────
+    static final String PARTICLE2_VERT =
+        "#version 330 core\n" +
+        "layout(location=0) in vec3 aPos;\n" +
+        "layout(location=1) in vec2 aUV;\n" +
+        "layout(location=2) in vec4 aColor;\n" +
+        "uniform mat4 mvp;\n" +
+        "out vec2 vUV;\n" +
+        "out vec4 vColor;\n" +
+        "void main(){\n" +
+        "  gl_Position = mvp * vec4(aPos,1.0);\n" +
+        "  vUV = vec2(aUV.x, 1.0-aUV.y);\n" +
+        "  vColor = aColor;\n" +
+        "}\n";
+
+    static final String PARTICLE2_FRAG =
+        "#version 330 core\n" +
+        "in vec2 vUV;\n" +
+        "in vec4 vColor;\n" +
+        "uniform sampler2D tex;\n" +
+        "uniform bool uHasTex;\n" +
+        "out vec4 fragColor;\n" +
+        "void main(){\n" +
+        "  vec4 texel = uHasTex ? texture(tex, vUV) : vec4(1.0);\n" +
+        "  fragColor = vec4(texel.rgb * vColor.rgb, texel.a * vColor.a);\n" +
+        "  if (fragColor.a < 0.004) discard;\n" +
+        "}\n";
+
     static final String RIBBON_VERT =
         "#version 330 core\n" +
         "layout(location=0) in vec3 aPos;\n" +
@@ -305,6 +342,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
              parsed == null ? new GeosetTexData[0] : parsed.texData(),
              parsed == null ? CollisionShape.EMPTY_ARRAY : parsed.collisionShapes(),
              parsed == null ? RibbonEmitterData.EMPTY_ARRAY : parsed.ribbonEmitters(),
+             parsed == null ? ParticleEmitter2Data.EMPTY_ARRAY : parsed.particleEmitters2(),
              parsed == null ? MaterialInfo.EMPTY_ARRAY : parsed.materials(),
              null, null);
     }
@@ -312,35 +350,39 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public GlPreviewCanvas(ModelMesh mesh, ModelAnimData animData,
                            GeosetTexData[] texData, Path modelDir) {
         this(mesh, animData, texData, CollisionShape.EMPTY_ARRAY,
-                RibbonEmitterData.EMPTY_ARRAY, MaterialInfo.EMPTY_ARRAY, modelDir, null);
+                RibbonEmitterData.EMPTY_ARRAY, ParticleEmitter2Data.EMPTY_ARRAY,
+                MaterialInfo.EMPTY_ARRAY, modelDir, null);
     }
 
     public GlPreviewCanvas(ModelMesh mesh, ModelAnimData animData,
                            GeosetTexData[] texData, Path modelDir, Path rootDir) {
         this(mesh, animData, texData, CollisionShape.EMPTY_ARRAY,
-                RibbonEmitterData.EMPTY_ARRAY, MaterialInfo.EMPTY_ARRAY, modelDir, rootDir);
+                RibbonEmitterData.EMPTY_ARRAY, ParticleEmitter2Data.EMPTY_ARRAY,
+                MaterialInfo.EMPTY_ARRAY, modelDir, rootDir);
     }
 
     public GlPreviewCanvas(ModelMesh mesh, ModelAnimData animData,
                            GeosetTexData[] texData, CollisionShape[] collisionShapes,
                            Path modelDir, Path rootDir) {
         this(mesh, animData, texData, collisionShapes,
-                RibbonEmitterData.EMPTY_ARRAY, MaterialInfo.EMPTY_ARRAY, modelDir, rootDir);
+                RibbonEmitterData.EMPTY_ARRAY, ParticleEmitter2Data.EMPTY_ARRAY,
+                MaterialInfo.EMPTY_ARRAY, modelDir, rootDir);
     }
 
     public GlPreviewCanvas(ModelMesh mesh, ModelAnimData animData,
                            GeosetTexData[] texData, CollisionShape[] collisionShapes,
-                           RibbonEmitterData[] ribbonEmitters, MaterialInfo[] materials,
-                           Path modelDir, Path rootDir) {
+                           RibbonEmitterData[] ribbonEmitters, ParticleEmitter2Data[] particleEmitters2,
+                           MaterialInfo[] materials, Path modelDir, Path rootDir) {
         super(createGlData());
-        this.mesh            = mesh            != null ? mesh            : ModelMesh.EMPTY;
-        this.animData        = animData        != null ? animData        : ModelAnimData.EMPTY;
-        this.texData         = texData         != null ? texData         : new GeosetTexData[0];
-        this.collisionShapes = collisionShapes != null ? collisionShapes : CollisionShape.EMPTY_ARRAY;
-        this.ribbonEmitters  = ribbonEmitters  != null ? ribbonEmitters  : RibbonEmitterData.EMPTY_ARRAY;
-        this.materials       = materials       != null ? materials       : MaterialInfo.EMPTY_ARRAY;
-        this.modelDir        = modelDir;
-        this.rootDir         = rootDir;
+        this.mesh              = mesh              != null ? mesh              : ModelMesh.EMPTY;
+        this.animData          = animData          != null ? animData          : ModelAnimData.EMPTY;
+        this.texData           = texData           != null ? texData           : new GeosetTexData[0];
+        this.collisionShapes   = collisionShapes   != null ? collisionShapes   : CollisionShape.EMPTY_ARRAY;
+        this.ribbonEmitters    = ribbonEmitters     != null ? ribbonEmitters    : RibbonEmitterData.EMPTY_ARRAY;
+        this.particleEmitters2 = particleEmitters2  != null ? particleEmitters2 : ParticleEmitter2Data.EMPTY_ARRAY;
+        this.materials         = materials          != null ? materials         : MaterialInfo.EMPTY_ARRAY;
+        this.modelDir          = modelDir;
+        this.rootDir           = rootDir;
         setFocusable(true);
         installInputHandlers();
         applyInitialCameraDistance();
@@ -434,6 +476,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             buildBoneVao();
             buildNodeCubeVao();
             initRibbons();
+            initParticles2();
         } else {
             buildCubeVao();
         }
@@ -485,18 +528,24 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 advanceAnimation();
                 if (animData.hasAnimation() && animatedVertices != null) {
                     uploadAnimatedVertices();
-                } else if (ribbonStates != null && animData.bones().length > 0) {
-                    // Compute world matrices for ribbon emitters even without mesh animation
+                } else if ((ribbonStates != null || particle2States != null) && animData.bones().length > 0) {
+                    // Compute world matrices for ribbon/particle emitters even without mesh animation
                     SequenceInfo seq = animData.sequences().get(currentSeqIdx);
                     float[] cameraRot = computeCameraRotationQuat();
                     lastWorldMap = BoneAnimator.computeWorldMatrices(
                             animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), cameraRot);
                 }
-                sampleGeosetAlpha();
-                sampleGeosetColor();
-                sampleLayerAlpha();
-                sampleTextureAnims();
+                // Only re-sample geoset properties while animation is playing.
+                // When stopped (non-looping, reached end), keep last sampled values
+                // so geosets that were hidden at the last frame stay hidden.
+                if (animPlaying) {
+                    sampleGeosetAlpha();
+                    sampleGeosetColor();
+                    sampleLayerAlpha();
+                    sampleTextureAnims();
+                }
                 simulateRibbons(lastDtSec);
+                simulateParticles2(lastDtSec);
             } else {
                 // Even without a selected sequence, global animations should run
                 sampleLayerAlpha();
@@ -516,6 +565,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             // Ribbon emitters (drawn after geosets, before overlays)
             if (ribbonStates != null && ribbonStates.length > 0) {
                 drawRibbons(modelMvp);
+            }
+            // Particle emitters 2 (drawn after ribbons, before overlays)
+            if (particle2States != null && particle2States.length > 0) {
+                drawParticles2(modelMvp);
             }
             // Highlight overlays (bone hover from Nodes tab, geoset hover from Materials tab)
             if (geoVao != null && solidShader != 0) {
@@ -1098,9 +1151,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     private void advanceAnimation() {
         long nowNs = System.nanoTime(), prev = lastNanoNs;
-        if (prev == 0L || !animPlaying) { lastNanoNs = nowNs; lastDtSec = 0f; return; }
+        if (prev == 0L) { lastNanoNs = nowNs; lastDtSec = 0f; return; }
         long deltaNs = nowNs - prev; lastNanoNs = nowNs;
+        // Always compute real dt so particles/ribbons can continue expiring
         lastDtSec = (float)(deltaNs / 1_000_000_000.0 * animSpeed);
+        if (!animPlaying) return;
         long deltaMs = (long)(deltaNs / 1_000_000.0 * animSpeed);
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
         long duration = seq.end() - seq.start();
@@ -1400,6 +1455,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         animTimeMs    = seq.start();
         lastNanoNs    = 0L;
         resetRibbons();
+        resetParticles2();
         var cb = onSequenceChanged;
         if (cb != null) SwingUtilities.invokeLater(() -> cb.accept(idx));
         // Update extent overlay to show sequence extents if available
@@ -1529,10 +1585,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             if (bone.name().isEmpty()) continue;
             if (anyTypeFilter) {
                 boolean visible = switch (bone.nodeType()) {
-                    case BONE           -> showBones;
-                    case HELPER         -> showHelpers;
-                    case ATTACHMENT     -> showAttachments;
-                    case RIBBON_EMITTER -> showAttachments; // show with attachments
+                    case BONE               -> showBones;
+                    case HELPER             -> showHelpers;
+                    case ATTACHMENT         -> showAttachments;
+                    case RIBBON_EMITTER, PARTICLE_EMITTER2 -> showAttachments;
                 };
                 if (!visible) continue;
             }
@@ -2093,7 +2149,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             switch (bone.nodeType()) {
                 case BONE           -> bonePosList.add(pos);
                 case HELPER         -> helperPosList.add(pos);
-                case ATTACHMENT, RIBBON_EMITTER -> attachPosList.add(pos);
+                case ATTACHMENT, RIBBON_EMITTER, PARTICLE_EMITTER2 -> attachPosList.add(pos);
             }
         }
         bonePositions   = bonePosList.toArray(new float[0][]);
@@ -2774,5 +2830,605 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private void resetRibbons() {
         if (ribbonStates == null) return;
         for (RibbonState rs : ribbonStates) rs.reset();
+    }
+
+    // ── Particle Emitter 2 ──────────────────────────────────────────────────
+
+    private static final class Particle2State {
+        final ParticleEmitter2Data data;
+        final float[] pivot;        // emitter node's pivot [x,y,z]
+        final float[][] pos;        // ring buffer: position [maxP][3] (world or local depending on modelSpace)
+        final float[][] vel;        // ring buffer: velocity [maxP][3]
+        final float[] age;          // ring buffer: remaining health (seconds, counts down)
+        final boolean[] isHead;     // ring buffer: true=head particle, false=tail particle
+        final float[][] nodeScale;  // ring buffer: world scale at spawn time [maxP][3]
+        int head = 0;               // next write position
+        int count = 0;              // alive particles
+        float emission = 0f;        // fractional accumulator
+        float lastEmissionRate = -1f; // for squirt mode
+
+        Particle2State(ParticleEmitter2Data data, float[] pivot) {
+            this.data = data;
+            this.pivot = pivot;
+            // Both head and tail particles share the pool when headOrTail==2
+            int factor = (data.headOrTail() == 2) ? 2 : 1;
+            int maxP = Math.max(8, (int)(data.lifeSpan() * data.emissionRate() * factor) + 8);
+            pos = new float[maxP][3];
+            vel = new float[maxP][3];
+            age = new float[maxP];
+            isHead = new boolean[maxP];
+            nodeScale = new float[maxP][3];
+        }
+
+        int capacity() { return age.length; }
+        int tail() { return (head - count + capacity()) % capacity(); }
+
+        void reset() {
+            head = 0; count = 0; emission = 0f; lastEmissionRate = -1f;
+            for (float[] v : vel) java.util.Arrays.fill(v, 0f);
+            java.util.Arrays.fill(age, 0f);
+        }
+    }
+
+    private void initParticles2() {
+        if (particleEmitters2.length == 0) return;
+
+        particle2States = new Particle2State[particleEmitters2.length];
+        particle2Textures = new int[particleEmitters2.length];
+
+        // Build objectId → pivot lookup
+        java.util.Map<Integer, float[]> pivotMap = new java.util.HashMap<>();
+        for (BoneNode bone : animData.bones()) {
+            pivotMap.put(bone.objectId(), bone.pivot());
+        }
+
+        for (int i = 0; i < particleEmitters2.length; i++) {
+            float[] pivot = pivotMap.getOrDefault(particleEmitters2[i].objectId(), new float[3]);
+            particle2States[i] = new Particle2State(particleEmitters2[i], pivot);
+            // Resolve texture
+            String texPath = particleEmitters2[i].texturePath();
+            if (texPath != null && !texPath.isBlank() && modelDir != null) {
+                particle2Textures[i] = loadGlTexture(texPath, particleEmitters2[i].replaceableId());
+            }
+        }
+
+        // Compile particle shader
+        particle2Shader = linkProgram(PARTICLE2_VERT, PARTICLE2_FRAG);
+        if (particle2Shader != 0) {
+            particle2Mvp = glGetUniformLocation(particle2Shader, "mvp");
+            particle2Sampler = glGetUniformLocation(particle2Shader, "tex");
+            particle2HasTex = glGetUniformLocation(particle2Shader, "uHasTex");
+        }
+
+        // Create dynamic VAO/VBO
+        particle2Vao = glGenVertexArrays();
+        particle2Vbo = glGenBuffers();
+        glBindVertexArray(particle2Vao);
+        glBindBuffer(GL_ARRAY_BUFFER, particle2Vbo);
+        glBufferData(GL_ARRAY_BUFFER, (long) P2_MAX_VERTS * P2_FLOATS_PER_VERT * 4, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, P2_FLOATS_PER_VERT * 4, 0L);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, false, P2_FLOATS_PER_VERT * 4, 3L * 4);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 4, GL_FLOAT, false, P2_FLOATS_PER_VERT * 4, 5L * 4);
+        glEnableVertexAttribArray(2);
+        glBindVertexArray(0);
+    }
+
+    /** Extract world scale from a 4x4 column-major matrix (lengths of basis columns). */
+    private static float[] extractWorldScale(float[] m) {
+        float sx = (float) Math.sqrt(m[0]*m[0] + m[1]*m[1] + m[2]*m[2]);
+        float sy = (float) Math.sqrt(m[4]*m[4] + m[5]*m[5] + m[6]*m[6]);
+        float sz = (float) Math.sqrt(m[8]*m[8] + m[9]*m[9] + m[10]*m[10]);
+        return new float[]{sx, sy, sz};
+    }
+
+    /** Extract world rotation quaternion from a 4x4 column-major matrix (assumes orthogonal). */
+    private static float[] extractWorldRotation(float[] m) {
+        // Remove scale from basis vectors
+        float sx = (float) Math.sqrt(m[0]*m[0] + m[1]*m[1] + m[2]*m[2]);
+        float sy = (float) Math.sqrt(m[4]*m[4] + m[5]*m[5] + m[6]*m[6]);
+        float sz = (float) Math.sqrt(m[8]*m[8] + m[9]*m[9] + m[10]*m[10]);
+        if (sx < 0.0001f) sx = 1f;
+        if (sy < 0.0001f) sy = 1f;
+        if (sz < 0.0001f) sz = 1f;
+        float r00 = m[0]/sx, r10 = m[1]/sx, r20 = m[2]/sx;
+        float r01 = m[4]/sy, r11 = m[5]/sy, r21 = m[6]/sy;
+        float r02 = m[8]/sz, r12 = m[9]/sz, r22 = m[10]/sz;
+        // Convert rotation matrix to quaternion [x,y,z,w]
+        float tr = r00 + r11 + r22;
+        float qx, qy, qz, qw;
+        if (tr > 0) {
+            float s = (float) Math.sqrt(tr + 1.0) * 2f;
+            qw = 0.25f * s; qx = (r21-r12)/s; qy = (r02-r20)/s; qz = (r10-r01)/s;
+        } else if (r00 > r11 && r00 > r22) {
+            float s = (float) Math.sqrt(1.0 + r00 - r11 - r22) * 2f;
+            qw = (r21-r12)/s; qx = 0.25f * s; qy = (r01+r10)/s; qz = (r02+r20)/s;
+        } else if (r11 > r22) {
+            float s = (float) Math.sqrt(1.0 + r11 - r00 - r22) * 2f;
+            qw = (r02-r20)/s; qx = (r01+r10)/s; qy = 0.25f * s; qz = (r12+r21)/s;
+        } else {
+            float s = (float) Math.sqrt(1.0 + r22 - r00 - r11) * 2f;
+            qw = (r10-r01)/s; qx = (r02+r20)/s; qy = (r12+r21)/s; qz = 0.25f * s;
+        }
+        return new float[]{qx, qy, qz, qw};
+    }
+
+    /** Create quaternion from axis-angle. Axis [ax,ay,az], angle in radians. */
+    private static float[] quatFromAA(float ax, float ay, float az, float angle) {
+        float halfAngle = angle * 0.5f;
+        float s = (float) Math.sin(halfAngle);
+        return new float[]{ax*s, ay*s, az*s, (float) Math.cos(halfAngle)};
+    }
+
+    /** Rotate vector [vx,vy,vz] by quaternion [x,y,z,w]. */
+    private static float[] quatRotateVec(float[] q, float vx, float vy, float vz) {
+        float qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+        // t = 2 * cross(q.xyz, v)
+        float tx = 2f * (qy*vz - qz*vy);
+        float ty = 2f * (qz*vx - qx*vz);
+        float tz = 2f * (qx*vy - qy*vx);
+        return new float[]{
+            vx + qw*tx + (qy*tz - qz*ty),
+            vy + qw*ty + (qz*tx - qx*tz),
+            vz + qw*tz + (qx*ty - qy*tx)
+        };
+    }
+
+    private static float randomInRange(float min, float max) {
+        return min + (float) Math.random() * (max - min);
+    }
+
+    private void simulateParticles2(float dt) {
+        if (particle2States == null || dt <= 0f) return;
+
+        Map<Integer, float[]> wm = lastWorldMap;
+        if (wm == null) return;
+
+        SequenceInfo seq = (currentSeqIdx >= 0 && currentSeqIdx < animData.sequences().size())
+                ? animData.sequences().get(currentSeqIdx) : null;
+        long[] globalSeqs = animData.globalSequences();
+
+        for (Particle2State ps : particle2States) {
+            ParticleEmitter2Data pd = ps.data;
+            float[] matrix = wm.get(pd.objectId());
+            if (matrix == null) continue;
+
+            float gravity = interpolateScalar(pd.gravityTrack(), seq, globalSeqs, pd.gravity());
+            float lifeSpan = pd.lifeSpan();
+            if (lifeSpan <= 0f) lifeSpan = 1f;
+
+            // Extract world scale for gravity scaling
+            float[] worldScale = extractWorldScale(matrix);
+
+            int cap = ps.capacity();
+
+            // Update existing particles: age and physics
+            for (int pi = 0; pi < ps.count; pi++) {
+                int idx = (ps.tail() + pi) % cap;
+                ps.age[idx] -= dt; // health counts down
+                if (ps.age[idx] <= 0f) continue;
+                // Gravity scaled by world Z scale (matching Reteras)
+                ps.vel[idx][2] -= gravity * worldScale[2] * dt;
+                ps.pos[idx][0] += ps.vel[idx][0] * dt;
+                ps.pos[idx][1] += ps.vel[idx][1] * dt;
+                ps.pos[idx][2] += ps.vel[idx][2] * dt;
+            }
+
+            // Remove dead particles from tail
+            while (ps.count > 0) {
+                int tailIdx = ps.tail();
+                if (ps.age[tailIdx] > 0f) break;
+                ps.count--;
+            }
+
+            // Visibility gates emission
+            float vis = interpolateScalar(pd.visibilityTrack(), seq, globalSeqs, 1f);
+            if (vis <= 0f) { ps.emission = 0f; continue; }
+
+            // Animated parameters
+            float emissionRate = interpolateScalar(pd.emissionRateTrack(), seq, globalSeqs, pd.emissionRate());
+            float speed = interpolateScalar(pd.speedTrack(), seq, globalSeqs, pd.speed());
+            float variation = interpolateScalar(pd.variationTrack(), seq, globalSeqs, pd.variation());
+            float latitude = interpolateScalar(pd.latitudeTrack(), seq, globalSeqs, pd.latitude());
+            float latRad = (float) Math.toRadians(latitude);
+            float width = interpolateScalar(pd.widthTrack(), seq, globalSeqs, pd.width()) * 0.5f;
+            float length = interpolateScalar(pd.lengthTrack(), seq, globalSeqs, pd.length()) * 0.5f;
+
+            // Squirt mode: emit burst only when emission rate changes
+            if (pd.squirt() != 0) {
+                if (emissionRate != ps.lastEmissionRate) {
+                    ps.emission += emissionRate;
+                }
+                ps.lastEmissionRate = emissionRate;
+            } else {
+                ps.emission += emissionRate * dt;
+            }
+
+            // Extract world rotation for velocity direction
+            float[] worldRot = pd.isModelSpace() ? new float[]{0,0,0,1} : extractWorldRotation(matrix);
+
+            while (ps.emission >= 1f) {
+                ps.emission -= 1f;
+
+                // Emit head and/or tail particles
+                boolean emitHead = pd.headOrTail() == 0 || pd.headOrTail() == 2;
+                boolean emitTail = pd.headOrTail() == 1 || pd.headOrTail() == 2;
+
+                // Compute shared spawn data
+                // Local position: pivot + random offset in width/length area
+                float lx = ps.pivot[0] + randomInRange(-width, width);
+                float ly = ps.pivot[1] + randomInRange(-length, length);
+                float lz = ps.pivot[2];
+
+                // World position
+                float spawnX, spawnY, spawnZ;
+                if (pd.isModelSpace()) {
+                    spawnX = lx; spawnY = ly; spawnZ = lz;
+                } else {
+                    float[] wp = transformPoint(matrix, lx, ly, lz);
+                    spawnX = wp[0]; spawnY = wp[1]; spawnZ = wp[2];
+                }
+
+                // Velocity direction using Reteras' quaternion rotation approach:
+                // Start with [0,0,1], rotate by: rotZ(π/2) * rotX(random(-lat,lat))
+                // If not line emitter: also rotY(random(-lat,lat))
+                float[] rotZ = quatFromAA(0, 0, 1, (float)(Math.PI / 2.0));
+                float[] rotX = quatFromAA(1, 0, 0, randomInRange(-latRad, latRad));
+                float[] combined = quatMul(rotX, rotZ);
+                if (!pd.isLineEmitter()) {
+                    float[] rotY = quatFromAA(0, 1, 0, randomInRange(-latRad, latRad));
+                    combined = quatMul(rotY, combined);
+                }
+                // Apply world rotation (if not model space)
+                if (!pd.isModelSpace()) {
+                    combined = quatMul(worldRot, combined);
+                }
+                float[] velDir = quatRotateVec(combined, 0, 0, 1);
+
+                // Apply speed with variation (random range, not multiplier)
+                float s = speed + randomInRange(-variation, variation);
+
+                // Scale velocity by world scale
+                float vx = velDir[0] * s * worldScale[0];
+                float vy = velDir[1] * s * worldScale[1];
+                float vz = velDir[2] * s * worldScale[2];
+
+                if (emitHead) emitParticle2(ps, spawnX, spawnY, spawnZ, vx, vy, vz, lifeSpan, true, worldScale);
+                if (emitTail) emitParticle2(ps, spawnX, spawnY, spawnZ, vx, vy, vz, lifeSpan, false, worldScale);
+            }
+        }
+    }
+
+    private static void emitParticle2(Particle2State ps, float px, float py, float pz,
+                                       float vx, float vy, float vz,
+                                       float lifeSpan, boolean head, float[] worldScale) {
+        int cap = ps.capacity();
+        int slot = ps.head;
+        ps.pos[slot][0] = px; ps.pos[slot][1] = py; ps.pos[slot][2] = pz;
+        ps.vel[slot][0] = vx; ps.vel[slot][1] = vy; ps.vel[slot][2] = vz;
+        ps.age[slot] = lifeSpan; // health counts down from lifeSpan to 0
+        ps.isHead[slot] = head;
+        ps.nodeScale[slot][0] = worldScale[0];
+        ps.nodeScale[slot][1] = worldScale[1];
+        ps.nodeScale[slot][2] = worldScale[2];
+        ps.head = (ps.head + 1) % cap;
+        if (ps.count < cap) ps.count++;
+    }
+
+    /**
+     * Compute camera billboard vectors in WC3 Z-up model space.
+     * Returns 7 vectors matching Reteras' ViewerCamera.billboardedVectors:
+     *   [0..3] = 4 corners of a 2x2 rectangle billboarded to camera
+     *   [4] = camera right (X axis)
+     *   [5] = camera up (Y axis)
+     *   [6] = camera forward (Z axis)
+     *
+     * Uses computeCameraRotationQuat() which correctly produces the inverse
+     * camera rotation in Z-up model space: Rx(90) * Ry(-yaw) * Rx(-pitch).
+     * Each base vector (in camera space) is rotated by this quaternion to
+     * produce the corresponding direction in model space — exactly how
+     * Reteras' ViewerCamera billboards its vectors.
+     */
+    private float[][] computeBillboardVectors() {
+        float[] invRot = computeCameraRotationQuat();
+        // Base vectors in camera space (matching Reteras' ViewerCamera.vectors)
+        // Corners of a 2x2 rectangle + 3 unit axes
+        float[][] base = {
+            {-1, -1, 0}, {-1, 1, 0}, {1, 1, 0}, {1, -1, 0},
+            {1, 0, 0}, {0, 1, 0}, {0, 0, 1}
+        };
+        float[][] result = new float[7][];
+        for (int i = 0; i < 7; i++) {
+            result[i] = quatRotateVec(invRot, base[i][0], base[i][1], base[i][2]);
+        }
+        return result;
+    }
+
+    /**
+     * Build particle geometry for all PE2 emitters into the given buffer.
+     * Uses billboarded vectors for head quads and velocity-oriented geometry for tails,
+     * matching Reteras' Model Studio approach.
+     */
+    private int buildParticle2Geometry(float[] buf, float[][] bbVectors) {
+        if (particle2States == null) return 0;
+        int vi = 0;
+        int maxFloats = P2_MAX_VERTS * P2_FLOATS_PER_VERT;
+
+        // XY quad (non-billboarded) corners
+        float[][] xyQuadVecs = {
+            {-1, 1, 0}, {1, 1, 0}, {1, -1, 0}, {-1, -1, 0},
+            {1, 0, 0}, {0, 1, 0}, {0, 0, 1}
+        };
+
+        Map<Integer, float[]> wm = lastWorldMap;
+
+        for (Particle2State ps : particle2States) {
+            if (ps.count == 0) continue;
+            ParticleEmitter2Data pd = ps.data;
+            float lifeSpan = pd.lifeSpan();
+            if (lifeSpan <= 0f) lifeSpan = 1f;
+            float timeMid = pd.timeMiddle();
+
+            int rows = Math.max(1, pd.rows());
+            int cols = Math.max(1, pd.columns());
+
+            float[][] segColors = pd.segmentColors();
+            short[] segAlphas = pd.segmentAlphas();
+            float[] segScaling = pd.segmentScaling();
+
+            long[][] headIntervals = pd.headIntervals();
+            long[][] tailIntervals = pd.tailIntervals();
+
+            // Choose billboard or XY quad vectors
+            float[][] vectors = pd.isXYQuad() ? xyQuadVecs : bbVectors;
+
+            // Get world matrix for model-space transform
+            float[] worldMatrix = (pd.isModelSpace() && wm != null) ? wm.get(pd.objectId()) : null;
+
+            int cap = ps.capacity();
+            for (int pi = 0; pi < ps.count; pi++) {
+                int idx = (ps.tail() + pi) % cap;
+                float health = ps.age[idx];
+                if (health <= 0f) continue;
+                float lifeFactor = (lifeSpan - health) / lifeSpan; // 0 at birth, 1 at death
+
+                // 3-segment lifecycle interpolation (matching Reteras)
+                float factor;
+                int firstColor;
+                long[][] interval;
+
+                if (lifeFactor < timeMid) {
+                    factor = timeMid > 0f ? lifeFactor / timeMid : 0f;
+                    firstColor = 0;
+                    interval = ps.isHead[idx] ? headIntervals : tailIntervals;
+                } else {
+                    factor = timeMid < 1f ? (lifeFactor - timeMid) / (1f - timeMid) : 1f;
+                    firstColor = 1;
+                    // For decay phase, use decay intervals (index 1 in the interval arrays)
+                    interval = ps.isHead[idx] ? headIntervals : tailIntervals;
+                }
+                factor = Math.min(factor, 1f);
+
+                // Color interpolation
+                float cr = lerp(segColors[firstColor][0], segColors[firstColor + 1][0], factor);
+                float cg = lerp(segColors[firstColor][1], segColors[firstColor + 1][1], factor);
+                float cb = lerp(segColors[firstColor][2], segColors[firstColor + 1][2], factor);
+                float ca = lerp((segAlphas[firstColor] & 0xFF) / 255f,
+                                (segAlphas[firstColor + 1] & 0xFF) / 255f, factor);
+
+                // Scale interpolation
+                float scale = lerp(segScaling[firstColor], segScaling[firstColor + 1], factor);
+
+                // UV computation matching Reteras:
+                // index = start + floor(spriteCount * repeat * factor) % spriteCount
+                float left, top, right, bottom;
+                // Select the correct interval row based on phase
+                long[] intervalRow;
+                if (lifeFactor < timeMid) {
+                    // Life span phase - use interval[0]
+                    intervalRow = (interval != null && interval.length > 0) ? interval[0] : new long[]{0, 0, 1};
+                } else {
+                    // Decay phase - use interval[1]
+                    intervalRow = (interval != null && interval.length > 1) ? interval[1] : new long[]{0, 0, 1};
+                }
+                float uvStart = intervalRow.length > 0 ? intervalRow[0] : 0;
+                float uvEnd = intervalRow.length > 1 ? intervalRow[1] : 0;
+                float uvRepeat = intervalRow.length > 2 ? intervalRow[2] : 1;
+                float spriteCount = uvEnd - uvStart;
+                float index = 0;
+                if (spriteCount > 0 && (cols > 1 || rows > 1)) {
+                    index = (float)(uvStart + (Math.floor(spriteCount * uvRepeat * factor) % spriteCount));
+                }
+                left = index % cols;
+                top = (int)(index / cols);
+                right = left + 1;
+                bottom = top + 1;
+                // Normalize UV to [0,1]
+                float u0 = left / cols, v0 = top / rows;
+                float u1 = right / cols, v1 = bottom / rows;
+
+                // Node scale at spawn time
+                float nsx = ps.nodeScale[idx][0];
+                float nsy = ps.nodeScale[idx][1];
+                float nsz = ps.nodeScale[idx][2];
+                float scalex = scale * nsx;
+                float scaley = scale * nsy;
+                float scalez = scale * nsz;
+
+                if (ps.isHead[idx]) {
+                    // Head: billboard quad
+                    if (vi + 6 * P2_FLOATS_PER_VERT > maxFloats) break;
+
+                    float px = ps.pos[idx][0], py = ps.pos[idx][1], pz = ps.pos[idx][2];
+                    // Model space: transform to world at render time
+                    if (pd.isModelSpace() && worldMatrix != null) {
+                        float[] wp = transformPoint(worldMatrix, px, py, pz);
+                        px = wp[0]; py = wp[1]; pz = wp[2];
+                    }
+
+                    // 4 corners using billboard vectors scaled per-axis
+                    float[] pv0 = vectors[0], pv1 = vectors[1], pv2 = vectors[2], pv3 = vectors[3];
+                    float v0x = px + pv0[0]*scalex, v0y = py + pv0[1]*scaley, v0z = pz + pv0[2]*scalez;
+                    float v1x = px + pv1[0]*scalex, v1y = py + pv1[1]*scaley, v1z = pz + pv1[2]*scalez;
+                    float v2x = px + pv2[0]*scalex, v2y = py + pv2[1]*scaley, v2z = pz + pv2[2]*scalez;
+                    float v3x = px + pv3[0]*scalex, v3y = py + pv3[1]*scaley, v3z = pz + pv3[2]*scalez;
+
+                    // Two triangles: (0,1,2) and (0,2,3) — matching Reteras vertex winding
+                    vi = addP2Vert(buf, vi, v0x, v0y, v0z, u1, v1, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, v1x, v1y, v1z, u0, v1, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, v2x, v2y, v2z, u0, v0, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, v0x, v0y, v0z, u1, v1, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, v2x, v2y, v2z, u0, v0, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, v3x, v3y, v3z, u1, v0, cr, cg, cb, ca);
+                } else {
+                    // Tail: velocity-oriented quad
+                    if (vi + 6 * P2_FLOATS_PER_VERT > maxFloats) break;
+
+                    float tailLength = pd.tailLength();
+                    float vx = ps.vel[idx][0], vy = ps.vel[idx][1], vz = ps.vel[idx][2];
+
+                    // Start = position - velocity * tailLength, End = position
+                    float startX = ps.pos[idx][0] - tailLength * vx;
+                    float startY = ps.pos[idx][1] - tailLength * vy;
+                    float startZ = ps.pos[idx][2] - tailLength * vz;
+                    float endX = ps.pos[idx][0];
+                    float endY = ps.pos[idx][1];
+                    float endZ = ps.pos[idx][2];
+
+                    // Model space: transform start and end to world
+                    if (pd.isModelSpace() && worldMatrix != null) {
+                        float[] ws = transformPoint(worldMatrix, startX, startY, startZ);
+                        startX = ws[0]; startY = ws[1]; startZ = ws[2];
+                        float[] we = transformPoint(worldMatrix, endX, endY, endZ);
+                        endX = we[0]; endY = we[1]; endZ = we[2];
+                    }
+
+                    // Tail direction
+                    float tdx = endX - startX, tdy = endY - startY, tdz = endZ - startZ;
+                    float tlen = (float) Math.sqrt(tdx*tdx + tdy*tdy + tdz*tdz);
+                    if (tlen > 0.0001f) { tdx /= tlen; tdy /= tlen; tdz /= tlen; }
+
+                    // Normal: cross(cameraForward, tailDir) — matching Reteras
+                    float[] camFwd = vectors[6]; // camera forward (Z axis)
+                    float nx = camFwd[1]*tdz - camFwd[2]*tdy;
+                    float ny = camFwd[2]*tdx - camFwd[0]*tdz;
+                    float nz = camFwd[0]*tdy - camFwd[1]*tdx;
+                    float nlen = (float) Math.sqrt(nx*nx + ny*ny + nz*nz);
+                    if (nlen > 0.0001f) { nx /= nlen; ny /= nlen; nz /= nlen; }
+
+                    // Scale the normal
+                    float normalX = nx * scalex, normalY = ny * scaley, normalZ = nz * scalez;
+
+                    // 4 corners matching Reteras' winding order
+                    float c0x = startX - normalX, c0y = startY - normalY, c0z = startZ - normalZ;
+                    float c1x = endX - normalX,   c1y = endY - normalY,   c1z = endZ - normalZ;
+                    float c2x = endX + normalX,   c2y = endY + normalY,   c2z = endZ + normalZ;
+                    float c3x = startX + normalX, c3y = startY + normalY, c3z = startZ + normalZ;
+
+                    // Two triangles: (0,1,2) and (0,2,3)
+                    vi = addP2Vert(buf, vi, c0x, c0y, c0z, u1, v1, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, c1x, c1y, c1z, u0, v1, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, c2x, c2y, c2z, u0, v0, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, c0x, c0y, c0z, u1, v1, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, c2x, c2y, c2z, u0, v0, cr, cg, cb, ca);
+                    vi = addP2Vert(buf, vi, c3x, c3y, c3z, u1, v0, cr, cg, cb, ca);
+                }
+            }
+        }
+        return vi / P2_FLOATS_PER_VERT;
+    }
+
+    private static float lerp(float a, float b, float t) { return a + (b - a) * t; }
+
+    private static int addP2Vert(float[] buf, int off,
+                                  float x, float y, float z,
+                                  float u, float v,
+                                  float r, float g, float b, float a) {
+        buf[off++] = x; buf[off++] = y; buf[off++] = z;
+        buf[off++] = u; buf[off++] = v;
+        buf[off++] = r; buf[off++] = g; buf[off++] = b; buf[off++] = a;
+        return off;
+    }
+
+    private void drawParticles2(float[] mvp) {
+        if (particle2States == null || particle2Shader == 0) return;
+
+        // Compute billboard vectors in WC3 Z-up model space (7 vectors like Reteras)
+        float[][] bbVectors = computeBillboardVectors();
+
+        // Build geometry
+        float[] buf = new float[P2_MAX_VERTS * P2_FLOATS_PER_VERT];
+        int vertexCount = buildParticle2Geometry(buf, bbVectors);
+        if (vertexCount == 0) return;
+
+        // Upload to VBO
+        glBindBuffer(GL_ARRAY_BUFFER, particle2Vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0L, java.util.Arrays.copyOf(buf, vertexCount * P2_FLOATS_PER_VERT));
+
+        glUseProgram(particle2Shader);
+        glUniformMatrix4fv(particle2Mvp, false, mvp);
+        if (particle2Sampler >= 0) glUniform1i(particle2Sampler, 0);
+
+        glEnable(GL_BLEND);
+        glDepthMask(false);
+        glDisable(GL_CULL_FACE);
+
+        // Draw each emitter's portion of the buffer
+        int offset = 0;
+        for (int ei = 0; ei < particle2States.length; ei++) {
+            Particle2State ps = particle2States[ei];
+            if (ps.count == 0) continue;
+
+            // Count actual vertices emitted for this emitter
+            int emitterVerts = 0;
+            int cap = ps.capacity();
+            for (int pi = 0; pi < ps.count; pi++) {
+                int idx = (ps.tail() + pi) % cap;
+                if (ps.age[idx] > 0f) emitterVerts += 6; // 6 verts per quad
+            }
+            if (offset + emitterVerts > vertexCount) emitterVerts = vertexCount - offset;
+            if (emitterVerts <= 0) continue;
+
+            // Bind texture
+            boolean hasTex = (particle2Textures != null && particle2Textures[ei] != 0);
+            if (particle2HasTex >= 0) glUniform1i(particle2HasTex, hasTex ? 1 : 0);
+            if (hasTex) {
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, particle2Textures[ei]);
+            }
+
+            // Set blend mode matching Reteras' getBlendSrc/getBlendDst
+            applyParticle2BlendMode(ps.data.filterMode());
+
+            glBindVertexArray(particle2Vao);
+            glDrawArrays(GL_TRIANGLES, offset, emitterVerts);
+            offset += emitterVerts;
+        }
+
+        glBindVertexArray(0);
+        glEnable(GL_CULL_FACE);
+        glDepthMask(true);
+        glDisable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glUseProgram(0);
+    }
+
+    private static void applyParticle2BlendMode(int filterMode) {
+        switch (filterMode) {
+            case 0 -> glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // Blend
+            case 1 -> glBlendFunc(GL_SRC_ALPHA, GL_ONE);                 // Additive
+            case 2 -> glBlendFunc(GL_ZERO, GL_SRC_COLOR);                // Modulate
+            case 3 -> glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR);           // Modulate 2x
+            case 4 -> glBlendFunc(GL_SRC_ALPHA, GL_ONE);                 // AlphaKey (additive)
+            default -> glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        }
+    }
+
+    private void resetParticles2() {
+        if (particle2States == null) return;
+        for (Particle2State ps : particle2States) ps.reset();
     }
 }
