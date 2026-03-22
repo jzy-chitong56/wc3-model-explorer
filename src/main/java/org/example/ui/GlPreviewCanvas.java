@@ -78,7 +78,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     // GL resources (all initialised in initGL on the render thread)
     private int solidShader = 0, solidMvp = -1, solidColor = -1, solidAlpha = -1;
     private int texShader   = 0, texMvp   = -1, texMvLoc = -1, texSampler = -1, texHasTex = -1, texAlphaThresh = -1, texAlphaU = -1, texUVTransform = -1, texGeosetColor = -1, texUnshaded = -1;
-    private int litShader   = 0, litMvp   = -1, litMvLoc = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1, litGeosetColor = -1, litUnshaded = -1;
+    private int litShader   = 0, litMvp   = -1, litMvLoc = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1, litGeosetColor = -1, litUnshaded = -1, litLightDir = -1;
     private int normalsShader = 0, normalsMvp = -1, normalsMvLoc = -1;
     private int ribbonShader = 0, ribbonMvp = -1, ribbonSampler = -1, ribbonHasTex = -1, ribbonAlphaU = -1;
     private int particle2Shader = 0, particle2Mvp = -1, particle2Sampler = -1, particle2HasTex = -1;
@@ -181,6 +181,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "  vWorldPos = aPos;\n" +
         "}\n";
 
+    // Light direction matching Reteras Model Studio UI/MiscData.txt (model camera mode)
+    static final float[] LIGHT_DIR = normalize(0.3f, -0.3f, 0.25f);
+
     static final String TEX_FRAG =
         "#version 330 core\n" +
         "in vec2 vUV;\n" +
@@ -195,10 +198,6 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "out vec4 fragColor;\n" +
         "void main(){\n" +
         "  vec4 c = uHasTex ? texture(uTex, vUV) : vec4(0.74,0.78,0.86,1.0);\n" +
-        "  if(!uUnshaded){\n" +
-        "    vec3 N = length(vViewNormal) > 0.001 ? normalize(vViewNormal) : normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
-        "    c.rgb *= (3.0 + dot(N, vec3(0.0, 0.0, 1.0))) / 4.0;\n" +
-        "  }\n" +
         "  c.rgb *= uGeosetColor;\n" +
         "  c.a *= uAlpha;\n" +
         "  if(c.a < uAlphaThreshold) discard;\n" +
@@ -236,13 +235,14 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "uniform float uAlpha;\n" +
         "uniform vec3 uGeosetColor;\n" +
         "uniform bool uUnshaded;\n" +
+        "uniform vec3 uLightDir;\n" +
         "out vec4 fragColor;\n" +
         "void main(){\n" +
         "  vec4 base = uHasTex ? texture(uTex, vUV) : vec4(0.74,0.78,0.86,1.0);\n" +
         "  float shadowThing = 1.0;\n" +
         "  if(!uUnshaded){\n" +
         "    vec3 N = length(vViewNormal) > 0.001 ? normalize(vViewNormal) : normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
-        "    shadowThing = (3.0 + dot(N, vec3(0.0, 0.0, 1.0))) / 4.0;\n" +
+        "    shadowThing = clamp(clamp(dot(N, uLightDir), 0.0, 1.0) + 0.3, 0.0, 1.0);\n" +
         "  }\n" +
         "  base.rgb *= uGeosetColor;\n" +
         "  base.a *= uAlpha;\n" +
@@ -792,11 +792,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     }
 
     private void drawTextured(float[] mvp, float[] mv) {
-        drawPerGeoset(mvp, mv, texShader, texMvp, texMvLoc, texSampler, texHasTex, texAlphaThresh, texAlphaU, texUVTransform, texGeosetColor, texUnshaded);
+        drawPerGeoset(mvp, mv, texShader, texMvp, texMvLoc, texSampler, texHasTex, texAlphaThresh, texAlphaU, texUVTransform, texGeosetColor, texUnshaded, -1);
     }
 
     private void drawLit(float[] mvp, float[] mv) {
-        drawPerGeoset(mvp, mv, litShader, litMvp, litMvLoc, litSampler, litHasTex, litAlphaThresh, litAlphaU, litUVTransform, litGeosetColor, litUnshaded);
+        drawPerGeoset(mvp, mv, litShader, litMvp, litMvLoc, litSampler, litHasTex, litAlphaThresh, litAlphaU, litUVTransform, litGeosetColor, litUnshaded, litLightDir);
     }
 
     private void drawNormals(float[] mvp, float[] mv) {
@@ -1013,10 +1013,15 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     };
 
     private void drawPerGeoset(float[] mvp, float[] mv, int shader, int mvpLoc, int mvLoc, int samplerLoc,
-                                int hasTexLoc, int alphaThreshLoc, int alphaLoc, int uvTransformLoc, int geosetColorLoc, int unshadedLoc) {
+                                int hasTexLoc, int alphaThreshLoc, int alphaLoc, int uvTransformLoc, int geosetColorLoc, int unshadedLoc, int lightDirLoc) {
         glUseProgram(shader);
         glUniformMatrix4fv(mvpLoc, false, mvp);
         if (mvLoc >= 0) glUniformMatrix4fv(mvLoc, false, mv);
+        // Set light direction in view space (transform model-space light by the model-view matrix)
+        if (lightDirLoc >= 0) {
+            float[] ld = transformDirByMat(mv, LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2]);
+            glUniform3f(lightDirLoc, ld[0], ld[1], ld[2]);
+        }
         glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
 
         // Pass 1: opaque layers
@@ -1907,7 +1912,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     }
     private void compileLitShader() {
         litShader = linkProgram(LIT_VERT, LIT_FRAG);
-        if (litShader != 0) { litMvp = glGetUniformLocation(litShader,"mvp"); litMvLoc = glGetUniformLocation(litShader,"uModelView"); litSampler = glGetUniformLocation(litShader,"uTex"); litHasTex = glGetUniformLocation(litShader,"uHasTex"); litAlphaThresh = glGetUniformLocation(litShader,"uAlphaThreshold"); litAlphaU = glGetUniformLocation(litShader,"uAlpha"); litUVTransform = glGetUniformLocation(litShader,"uUVTransform"); litGeosetColor = glGetUniformLocation(litShader,"uGeosetColor"); litUnshaded = glGetUniformLocation(litShader,"uUnshaded"); }
+        if (litShader != 0) { litMvp = glGetUniformLocation(litShader,"mvp"); litMvLoc = glGetUniformLocation(litShader,"uModelView"); litSampler = glGetUniformLocation(litShader,"uTex"); litHasTex = glGetUniformLocation(litShader,"uHasTex"); litAlphaThresh = glGetUniformLocation(litShader,"uAlphaThreshold"); litAlphaU = glGetUniformLocation(litShader,"uAlpha"); litUVTransform = glGetUniformLocation(litShader,"uUVTransform"); litGeosetColor = glGetUniformLocation(litShader,"uGeosetColor"); litUnshaded = glGetUniformLocation(litShader,"uUnshaded"); litLightDir = glGetUniformLocation(litShader,"uLightDir"); }
     }
     private void compileNormalsShader() {
         normalsShader = linkProgram(NORMALS_VERT, NORMALS_FRAG);
@@ -2529,6 +2534,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     static float[] rotateY(float[] m,float d){float c=(float)Math.cos(Math.toRadians(d)),s=(float)Math.sin(Math.toRadians(d));float[] r=identity();r[0]=c;r[2]=-s;r[8]=s;r[10]=c;return matMul(m,r);}
     static float[] scale(float[] m,float s){float[] sc=identity();sc[0]=s;sc[5]=s;sc[10]=s;return matMul(m,sc);}
     static float[] matMul(float[] a,float[] b){float[] r=new float[16];for(int row=0;row<4;row++)for(int col=0;col<4;col++){float s=0;for(int k=0;k<4;k++)s+=a[row+k*4]*b[k+col*4];r[row+col*4]=s;}return r;}
+    private static float[] normalize(float x, float y, float z) { float l=(float)Math.sqrt(x*x+y*y+z*z); return l>0?new float[]{x/l,y/l,z/l}:new float[]{0,0,1}; }
+    private static float[] transformDirByMat(float[] m, float x, float y, float z) { float rx=m[0]*x+m[4]*y+m[8]*z, ry=m[1]*x+m[5]*y+m[9]*z, rz=m[2]*x+m[6]*y+m[10]*z; float l=(float)Math.sqrt(rx*rx+ry*ry+rz*rz); return l>0?new float[]{rx/l,ry/l,rz/l}:new float[]{0,0,1}; }
 
     // ── Camera ───────────────────────────────────────────────────────────────
 
