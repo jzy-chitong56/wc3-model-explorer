@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -244,6 +245,12 @@ public final class ThumbnailRenderer {
                 System.err.println("[Thumbnail] Error rendering " + req.asset().fileName() + ": " + ex);
                 currentRequest = null;
                 currentResult = null;
+                // Cache a placeholder so the card stops showing "Loading..."
+                BufferedImage errImg = createPlaceholder("Render error");
+                if (req.generation() == generation.get()) {
+                    cache.put(req.asset().path(), errImg);
+                    SwingUtilities.invokeLater(() -> req.callback().accept(errImg));
+                }
             }
         }
     }
@@ -304,12 +311,26 @@ public final class ThumbnailRenderer {
     }
 
     private BufferedImage renderThumbnail(ThumbnailRequest req) {
-        ReterasParsedModel parsed = ReterasModelParser.parse(req.asset().path());
-        if (parsed == null) return null;
+        ReterasParsedModel parsed;
+        try {
+            parsed = ReterasModelParser.parse(req.asset().path());
+        } catch (Exception ex) {
+            return createPlaceholder("Parse error: " + ex.getMessage());
+        }
+        if (parsed == null) return createPlaceholder("Failed to parse");
 
         ModelMesh mesh = parsed.mesh();
         GeosetTexData[] texData = parsed.texData();
-        if (mesh == null || mesh.isEmpty() || texData == null || texData.length == 0) return null;
+        if (mesh == null || mesh.isEmpty() || texData == null || texData.length == 0) {
+            if (parsed.metadata() == ModelMetadata.EMPTY) {
+                return createPlaceholder("Failed to parse");
+            }
+            // Model has metadata but no geometry — still valid if it has nodes/particles
+            boolean hasContent = parsed.animData().hasAnimation()
+                    || (parsed.particleEmitters2() != null && parsed.particleEmitters2().length > 0)
+                    || (parsed.ribbonEmitters() != null && parsed.ribbonEmitters().length > 0);
+            return createPlaceholder(hasContent ? "No geometry\n(has nodes/effects)" : "No geometry");
+        }
 
         Path modelDir = req.asset().path().getParent();
         Path rootDir = req.rootDir();
@@ -802,6 +823,66 @@ public final class ThumbnailRenderer {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glBindTexture(GL_TEXTURE_2D, 0);
         return tex;
+    }
+
+    // ── Placeholder for models that can't be rendered ─────────────────────────
+
+    private BufferedImage createPlaceholder(String message) {
+        BufferedImage img = new BufferedImage(thumbSize, thumbSize, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = img.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+        // Dark background
+        g2.setColor(new java.awt.Color(30, 35, 40));
+        g2.fillRect(0, 0, thumbSize, thumbSize);
+
+        // Warning icon (triangle with !)
+        int iconSize = thumbSize / 4;
+        int cx = thumbSize / 2;
+        int cy = thumbSize / 2 - iconSize / 3;
+        g2.setColor(new java.awt.Color(180, 140, 60));
+        g2.setStroke(new java.awt.BasicStroke(2f));
+        int[] xPts = {cx, cx - iconSize / 2, cx + iconSize / 2};
+        int[] yPts = {cy - iconSize / 2, cy + iconSize / 2, cy + iconSize / 2};
+        g2.drawPolygon(xPts, yPts, 3);
+        g2.setFont(g2.getFont().deriveFont(java.awt.Font.BOLD, iconSize * 0.5f));
+        java.awt.FontMetrics fmIcon = g2.getFontMetrics();
+        g2.drawString("!", cx - fmIcon.stringWidth("!") / 2, cy + iconSize / 4);
+
+        // Message text (word-wrapped)
+        g2.setColor(new java.awt.Color(160, 165, 170));
+        g2.setFont(g2.getFont().deriveFont(java.awt.Font.PLAIN, Math.max(10f, thumbSize / 20f)));
+        java.awt.FontMetrics fm = g2.getFontMetrics();
+        int maxWidth = thumbSize - 16;
+        int textY = cy + iconSize / 2 + fm.getHeight() + 4;
+        for (String line : wrapText(message, fm, maxWidth)) {
+            int tx = (thumbSize - fm.stringWidth(line)) / 2;
+            g2.drawString(line, tx, textY);
+            textY += fm.getHeight();
+            if (textY > thumbSize - 4) break;
+        }
+
+        g2.dispose();
+        return img;
+    }
+
+    private static List<String> wrapText(String text, java.awt.FontMetrics fm, int maxWidth) {
+        List<String> lines = new ArrayList<>();
+        if (text == null || text.isEmpty()) return lines;
+        String[] words = text.split("\\s+");
+        StringBuilder line = new StringBuilder();
+        for (String word : words) {
+            if (line.isEmpty()) {
+                line.append(word);
+            } else if (fm.stringWidth(line + " " + word) <= maxWidth) {
+                line.append(" ").append(word);
+            } else {
+                lines.add(line.toString());
+                line = new StringBuilder(word);
+            }
+        }
+        if (!line.isEmpty()) lines.add(line.toString());
+        return lines;
     }
 
     // ── Disk cache ────────────────────────────────────────────────────────────

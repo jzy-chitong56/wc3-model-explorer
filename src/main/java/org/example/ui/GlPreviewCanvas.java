@@ -483,7 +483,15 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             initRibbons();
             initParticles2();
         } else {
-            buildCubeVao();
+            // No mesh geometry — still initialize nodes/particles/ribbons if present
+            if (animData.hasAnimation()) {
+                buildBoneVao();
+                buildNodeCubeVao();
+                initRibbons();
+                initParticles2();
+            } else {
+                buildCubeVao();
+            }
         }
     }
 
@@ -663,6 +671,57 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             }
 
             // Node names (GL-rendered text overlay)
+            if (showNodeNames && animData.bones().length > 0) {
+                drawNodeNamesGL(modelMvp, w, h);
+            }
+        } else if (animData.hasAnimation()) {
+            // Mesh-less model with nodes/particles — animate and draw effects
+            if (currentSeqIdx >= 0 && currentSeqIdx < animData.sequences().size()) {
+                advanceAnimation();
+                SequenceInfo seq = animData.sequences().get(currentSeqIdx);
+                float[] cameraRot = computeCameraRotationQuat();
+                lastWorldMap = BoneAnimator.computeWorldMatrices(
+                        animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), cameraRot);
+                simulateRibbons(lastDtSec);
+                simulateParticles2(lastDtSec);
+            }
+            // Draw ribbons and particles
+            if (ribbonStates != null && ribbonStates.length > 0) {
+                drawRibbons(modelMvp);
+            }
+            if (particle2States != null && particle2States.length > 0) {
+                drawParticles2(modelMvp);
+            }
+            // Draw node overlays
+            boolean anyNodeOverlay = showBones || showHelpers || showAttachments;
+            if (anyNodeOverlay && boneVao != 0 && solidShader != 0 && animData.bones().length > 0) {
+                int[] segments = updateBoneVbo();
+                glUseProgram(solidShader);
+                glUniformMatrix4fv(solidMvp, false, modelMvp);
+                glDisable(GL_DEPTH_TEST);
+                int totalLines = segments[0] + segments[1] + segments[2];
+                if (totalLines > 0) {
+                    glBindVertexArray(boneVao);
+                    int lineOff = 0;
+                    if (showBones && segments[0] > 0) {
+                        glUniform3f(solidColor, 1.0f, 0.6f, 0.1f);
+                        glDrawArrays(GL_LINES, lineOff, segments[0]);
+                    }
+                    lineOff += segments[0];
+                    if (showHelpers && segments[1] > 0) {
+                        glUniform3f(solidColor, 0.9f, 0.85f, 0.2f);
+                        glDrawArrays(GL_LINES, lineOff, segments[1]);
+                    }
+                    lineOff += segments[1];
+                    if (showAttachments && segments[2] > 0) {
+                        glUniform3f(solidColor, 0.2f, 0.85f, 0.9f);
+                        glDrawArrays(GL_LINES, lineOff, segments[2]);
+                    }
+                    glBindVertexArray(0);
+                }
+                glEnable(GL_DEPTH_TEST);
+                glUseProgram(0);
+            }
             if (showNodeNames && animData.bones().length > 0) {
                 drawNodeNamesGL(modelMvp, w, h);
             }
@@ -2389,7 +2448,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     /** Camera orbit + Z-up→Y-up conversion + model centering/scaling. */
     private float[] buildModelView() {
         float[] m=buildCameraView();
-        if(hasRenderableMesh()){
+        if(hasRenderableMesh() || animData.hasAnimation()){
             m=rotateX(m,-90f); // WC3 Z-up → OpenGL Y-up
             m=translate(m,-frameCenterX,-frameCenterY,-frameCenterZ);
             m=scale(m,modelScale);
@@ -2417,32 +2476,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private void applyInitialCameraDistance() {
         if (hasRenderableMesh()) {
             float boundsRadius = resolveInitialBoundsRadius();
-            frameCenterX = 0f;
-            frameCenterY = 0f;
-            frameCenterZ = boundsRadius * 0.5f; // look at half-height (Retera convention)
-            modelScale = clamp(120f / boundsRadius, 0.005f, 500f);
-            float scaledRadius = boundsRadius * modelScale;
-            distance = clamp(scaledRadius * (float) Math.sqrt(2) * 2f,
-                    MIN_DISTANCE, MAX_DISTANCE);
-            panX = 0f;
-            panY = 0f;
+            frameToBounds(boundsRadius);
+        } else if (animData.hasAnimation()) {
+            float boundsRadius = computePivotBoundsRadius();
+            frameToBounds(Math.max(boundsRadius, 100f));
         } else {
             modelScale = 1f; distance = 300f; panX = 0f; panY = 0f;
         }
     }
 
-    /** Reframe the camera to fit the given sequence's bounding volume, resetting angles. */
-    public void reframeToSequence(SequenceInfo seq) {
-        if (!hasRenderableMesh()) return;
-        float boundsRadius;
-        if (seq != null && seq.boundsRadius() > 1f) {
-            boundsRadius = seq.boundsRadius();
-        } else if (seq != null && seq.hasExtent() && seq.extentRadius() > 0.001f) {
-            boundsRadius = seq.extentRadius();
-        } else {
-            boundsRadius = computeVertexBoundsRadius();
-        }
-        boundsRadius = clamp(boundsRadius, 0.1f, 10000f);
+    private void frameToBounds(float boundsRadius) {
         frameCenterX = 0f;
         frameCenterY = 0f;
         frameCenterZ = boundsRadius * 0.5f;
@@ -2450,6 +2493,38 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         float scaledRadius = boundsRadius * modelScale;
         distance = clamp(scaledRadius * (float) Math.sqrt(2) * 2f,
                 MIN_DISTANCE, MAX_DISTANCE);
+        panX = 0f;
+        panY = 0f;
+    }
+
+    /** Compute bounds radius from bone/node pivot points (for mesh-less models). */
+    private float computePivotBoundsRadius() {
+        BoneNode[] bones = animData.bones();
+        if (bones == null || bones.length == 0) return 100f;
+        float maxR = 0f;
+        for (BoneNode b : bones) {
+            float[] p = b.pivot();
+            if (p == null || p.length < 3) continue;
+            float r = (float) Math.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            maxR = Math.max(maxR, r);
+        }
+        return maxR > 0.001f ? maxR * 1.5f : 100f;
+    }
+
+    /** Reframe the camera to fit the given sequence's bounding volume, resetting angles. */
+    public void reframeToSequence(SequenceInfo seq) {
+        float boundsRadius;
+        if (seq != null && seq.boundsRadius() > 1f) {
+            boundsRadius = seq.boundsRadius();
+        } else if (seq != null && seq.hasExtent() && seq.extentRadius() > 0.001f) {
+            boundsRadius = seq.extentRadius();
+        } else if (hasRenderableMesh()) {
+            boundsRadius = computeVertexBoundsRadius();
+        } else {
+            boundsRadius = computePivotBoundsRadius();
+        }
+        boundsRadius = clamp(boundsRadius, 0.1f, 10000f);
+        frameToBounds(boundsRadius);
         panX = 0f;
         panY = 0f;
         yawDegrees = initialYaw;

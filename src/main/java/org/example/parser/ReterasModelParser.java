@@ -78,6 +78,7 @@ public final class ReterasModelParser {
                     buildMaterials(model), buildRibbonEmitters(model),
                     buildParticleEmitters2(model));
         } catch (IOException | RuntimeException ex) {
+            System.err.println("[Parser] Failed to parse " + path.getFileName() + ": " + ex.getMessage());
             return ReterasParsedModel.EMPTY;
         }
     }
