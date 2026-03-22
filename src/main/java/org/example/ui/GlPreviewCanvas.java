@@ -60,6 +60,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile float   nodeSize = 3.0f;
     private volatile int     highlightedBoneId = -1; // objectId of hovered node, -1 = none
     private volatile int     highlightedGeosetIdx = -1; // geoset index to highlight, -1 = none
+    private volatile int[]   highlightedGeosetIndices; // multiple geosets to highlight (e.g. for material selection)
     private volatile float bgR = 0.06f, bgG = 0.08f, bgB = 0.11f;
     private int     lastMouseX, lastMouseY;
     private boolean draggingOrbit, draggingPan;
@@ -91,6 +92,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private int[] geoVao, geoVbo, geoNormVbo, geoUvVbo, geoEbo, geoIndexCount, geoVertCount;
     private int[][] geoTex;       // [geosetIdx][layerIdx] — one texture per material layer
     private int[][] geoLayerUvVbo; // [geosetIdx][layerIdx] — UV VBO per layer (0 = use geoUvVbo)
+    private int[]   geosetMaterialId; // [geosetIdx] → material index
     private int[][] geoIndices; // cached index data per geoset (for highlight picking)
     private int highlightEbo = 0; // reusable EBO for bone highlight overlay
 
@@ -462,13 +464,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 int lc = texData[gi].layers().size();
                 layerUVTransforms[gi] = new float[Math.max(lc, 1)][];
             }
-            // Initialize layer alpha array: [geoset][layer] — all 1.0 by default
-            if (!animData.layerAlpha().isEmpty()) {
+            // Initialize layer alpha array: [geoset][layer] — use static alpha from layer data
+            {
                 layerAlphaValues = new float[texData.length][];
                 for (int gi = 0; gi < texData.length; gi++) {
-                    int layerCount = texData[gi].layers().size();
+                    var layers = texData[gi].layers();
+                    int layerCount = layers.size();
                     layerAlphaValues[gi] = new float[layerCount];
-                    java.util.Arrays.fill(layerAlphaValues[gi], 1.0f);
+                    for (int li = 0; li < layerCount; li++) {
+                        layerAlphaValues[gi][li] = layers.get(li).alpha();
+                    }
                 }
             }
             buildExtentVao();
@@ -574,6 +579,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             if (geoVao != null && solidShader != 0) {
                 if (highlightedBoneId >= 0) drawBoneHighlight(modelMvp);
                 if (highlightedGeosetIdx >= 0) drawGeosetHighlight(modelMvp);
+                if (highlightedGeosetIndices != null) drawMultiGeosetHighlight(modelMvp);
             }
             // Extent overlay (bounding box wireframe)
             if (showExtent && extentVao != 0 && solidShader != 0) {
@@ -908,6 +914,34 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glUseProgram(0);
     }
 
+    private void drawMultiGeosetHighlight(float[] mvp) {
+        int[] indices = highlightedGeosetIndices;
+        if (indices == null || indices.length == 0) return;
+
+        glUseProgram(solidShader);
+        glUniformMatrix4fv(solidMvp, false, mvp);
+        glUniform3f(solidColor, 1.0f, 0.6f, 0.15f);
+        glUniform1f(solidAlpha, 0.45f);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(false);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(-1f, -1f);
+
+        for (int gi : indices) {
+            if (gi < 0 || gi >= geoVao.length || geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
+            glBindVertexArray(geoVao[gi]);
+            glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
+        }
+
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glDepthMask(true);
+        glDisable(GL_BLEND);
+        glUniform1f(solidAlpha, 1.0f);
+        glBindVertexArray(0);
+        glUseProgram(0);
+    }
+
     /**
      * Two-pass per-geoset draw with filter mode GL state.
      * Pass 1: opaque geosets (NONE, TRANSPARENT) — depth write ON.
@@ -995,8 +1029,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         var layers = (gi < texData.length) ? texData[gi].layers() : java.util.List.<GeosetTexData.LayerTexData>of();
         int layerCount = geoTex[gi].length;
 
+        int matId = (geosetMaterialId != null && gi < geosetMaterialId.length) ? geosetMaterialId[gi] : -1;
+
         // If no multi-layer data, use legacy single-layer path
         if (layers.isEmpty()) {
+            if (matId >= 0 && !isLayerVisible(matId, 0)) return;
             boolean isOpaque = (gi < texData.length) ? texData[gi].isOpaque() : true;
             if (opaquePass != isOpaque) return;
             if (!opaquePass) applyBlendMode(texData[gi].filterMode());
@@ -1008,6 +1045,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
         glBindVertexArray(geoVao[gi]);
         for (int li = 0; li < Math.min(layerCount, layers.size()); li++) {
+            if (matId >= 0 && !isLayerVisible(matId, li)) continue;
             var layer = layers.get(li);
             boolean layerOpaque = layer.isOpaque();
             if (opaquePass != layerOpaque) continue;
@@ -1200,14 +1238,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
         long[] globalSeqs = animData.globalSequences();
         for (int gi = 0; gi < layerAlphaValues.length; gi++) {
+            var layers = (gi < texData.length) ? texData[gi].layers() : java.util.List.<GeosetTexData.LayerTexData>of();
             for (int li = 0; li < layerAlphaValues[gi].length; li++) {
+                float staticAlpha = (li < layers.size()) ? layers.get(li).alpha() : 1.0f;
                 AnimTrack track = animData.layerAlpha().get(ModelAnimData.layerKey(gi, li));
                 if (track != null && !track.isEmpty()) {
                     if (track.isGlobal() || hasKeysInRange(track, seq.start(), seq.end())) {
-                        float val = BoneAnimator.interpTrackScalar(track, animTimeMs, seq.start(), seq.end(), globalSeqs, 1f);
+                        float val = BoneAnimator.interpTrackScalar(track, animTimeMs, seq.start(), seq.end(), globalSeqs, staticAlpha);
                         layerAlphaValues[gi][li] = Math.max(0f, Math.min(1f, val));
                     } else {
-                        layerAlphaValues[gi][li] = 1.0f;
+                        layerAlphaValues[gi][li] = staticAlpha;
                     }
                 }
             }
@@ -1502,6 +1542,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public void setNodeSize(float s)         { nodeSize = Math.max(0.5f, Math.min(20f, s)); }
     public void setHighlightedBoneId(int id)    { highlightedBoneId = id; }
     public void setHighlightedGeosetIdx(int gi) { highlightedGeosetIdx = gi; }
+    public void setHighlightedGeosetIndices(int[] indices) { highlightedGeosetIndices = indices; }
     public void setGeosetVisible(int gi, boolean visible) {
         if (geosetVisibility == null && texData != null) {
             geosetVisibility = new boolean[texData.length];
@@ -1523,6 +1564,18 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     }
     public boolean isEmitterEnabled(int objectId) {
         return disabledEmitters == null || !disabledEmitters.contains(objectId);
+    }
+
+    // Layer visibility (by materialIndex + layerIndex)
+    private volatile java.util.Set<Long> disabledLayers; // null = all visible
+    public void setLayerVisible(int materialIdx, int layerIdx, boolean visible) {
+        if (disabledLayers == null) disabledLayers = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        long key = ((long) materialIdx << 16) | layerIdx;
+        if (visible) disabledLayers.remove(key);
+        else         disabledLayers.add(key);
+    }
+    public boolean isLayerVisible(int materialIdx, int layerIdx) {
+        return disabledLayers == null || !disabledLayers.contains(((long) materialIdx << 16) | layerIdx);
     }
 
     /** Snaps the camera to the model's camera node position/target. */
@@ -1798,6 +1851,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         geoLayerUvVbo = new int[geoCount][];
         geoVertCount = new int[geoCount];
         geoIndices   = new int[geoCount][];
+        geosetMaterialId = new int[geoCount];
 
         int[] allIndices = mesh.indices();
         int vertOffset   = 0;
@@ -1808,6 +1862,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             int vc = skin.vertexCount();
             if (vc == 0) continue;   // EMPTY – skipped in mesh
             if (gi >= geoCount) break;
+            geosetMaterialId[gi] = skin.materialId();
 
             // Count indices belonging to this geoset
             // (all adjacent indices in range [vertOffset, vertOffset+vc))

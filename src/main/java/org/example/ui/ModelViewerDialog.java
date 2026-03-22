@@ -252,6 +252,16 @@ public final class ModelViewerDialog extends JDialog {
             tabs.addTab("Nodes", buildNodesTab());
         }
 
+        // Clear highlights when switching away from contextual tabs
+        tabs.addChangeListener(e -> {
+            if (previewCanvas == null) return;
+            int idx = tabs.getSelectedIndex();
+            String title = idx >= 0 ? tabs.getTitleAt(idx) : "";
+            if (!"Materials".equals(title)) previewCanvas.setHighlightedGeosetIndices(null);
+            if (!"Geosets".equals(title))   previewCanvas.setHighlightedGeosetIdx(-1);
+            if (!"Nodes".equals(title))     previewCanvas.setHighlightedBoneId(-1);
+        });
+
         return tabs;
     }
 
@@ -767,6 +777,13 @@ public final class ModelViewerDialog extends JDialog {
 
     // ── Materials tab ────────────────────────────────────────────────────
 
+    private record MaterialNodeEntry(int materialIdx, String label) {
+        @Override public String toString() { return label; }
+    }
+    private record LayerNodeEntry(int materialIdx, int layerIdx, String label) {
+        @Override public String toString() { return label; }
+    }
+
     private JPanel buildMaterialsTab() {
         MaterialInfo[] materials = parsedModel.materials();
         JPanel panel = new JPanel(new BorderLayout());
@@ -782,19 +799,22 @@ public final class ModelViewerDialog extends JDialog {
             return panel;
         }
 
-        // Build a tree: each material is a parent node, layers are children
-        DefaultMutableTreeNode root = new DefaultMutableTreeNode("Materials");
         // Track which geosets use each material
         Map<Integer, List<Integer>> matToGeosets = new HashMap<>();
         ModelAnimData animData = parsedModel.animData();
         int gi = 0;
         for (var geoset : animData.geosets()) {
             if (geoset.vertexCount() > 0) {
-                int matId = geoset.materialId();
-                matToGeosets.computeIfAbsent(matId, k -> new java.util.ArrayList<>()).add(gi);
+                matToGeosets.computeIfAbsent(geoset.materialId(), k -> new java.util.ArrayList<>()).add(gi);
             }
             gi++;
         }
+
+        // Track layer visibility (all visible by default)
+        Map<Long, Boolean> layerEnabled = new HashMap<>();
+
+        // Build a tree: each material is a parent node, layers are children
+        DefaultMutableTreeNode root = new DefaultMutableTreeNode("Materials");
 
         for (MaterialInfo mat : materials) {
             StringBuilder matLabel = new StringBuilder();
@@ -808,14 +828,14 @@ public final class ModelViewerDialog extends JDialog {
                         .append("]");
             }
 
-            // Material flags description
             List<String> matFlags = new java.util.ArrayList<>();
             if ((mat.flags() & 0x01) != 0) matFlags.add("ConstantColor");
             if ((mat.flags() & 0x10) != 0) matFlags.add("SortPrimsFarZ");
             if ((mat.flags() & 0x20) != 0) matFlags.add("FullResolution");
             if (!matFlags.isEmpty()) matLabel.append("  {").append(String.join(", ", matFlags)).append("}");
 
-            DefaultMutableTreeNode matNode = new DefaultMutableTreeNode(matLabel.toString());
+            DefaultMutableTreeNode matNode = new DefaultMutableTreeNode(
+                    new MaterialNodeEntry(mat.index(), matLabel.toString()));
 
             for (int li = 0; li < mat.layers().size(); li++) {
                 MaterialInfo.LayerInfo layer = mat.layers().get(li);
@@ -842,7 +862,6 @@ public final class ModelViewerDialog extends JDialog {
                     layerLabel.append("  TexAnim=").append(layer.textureAnimId());
                 }
 
-                // Layer flags
                 List<String> flags = new java.util.ArrayList<>();
                 if (layer.isUnshaded())    flags.add("Unshaded");
                 if (layer.isTwoSided())    flags.add("TwoSided");
@@ -851,7 +870,10 @@ public final class ModelViewerDialog extends JDialog {
                 if (layer.isNoDepthSet())  flags.add("NoDepthSet");
                 if (!flags.isEmpty()) layerLabel.append("  {").append(String.join(", ", flags)).append("}");
 
-                matNode.add(new DefaultMutableTreeNode(layerLabel.toString()));
+                long key = ((long) mat.index() << 16) | li;
+                layerEnabled.put(key, true);
+                matNode.add(new DefaultMutableTreeNode(
+                        new LayerNodeEntry(mat.index(), li, layerLabel.toString())));
             }
             root.add(matNode);
         }
@@ -859,25 +881,88 @@ public final class ModelViewerDialog extends JDialog {
         JTree tree = new JTree(new DefaultTreeModel(root));
         tree.setRootVisible(false);
         tree.setShowsRootHandles(true);
+        tree.setRowHeight(Math.max(tree.getRowHeight(), ICON_SIZE + 4));
 
-        // Custom renderer with color hints
+        // Custom renderer: color hints + eye toggle on layer nodes
         tree.setCellRenderer(new DefaultTreeCellRenderer() {
+            private final JPanel layerPanel = new JPanel(new BorderLayout(4, 0));
+            private final JLabel eyeLabel = new JLabel();
+            {
+                layerPanel.setOpaque(false);
+                eyeLabel.setOpaque(false);
+            }
+
             @Override
             public Component getTreeCellRendererComponent(JTree tree, Object value,
                     boolean sel, boolean expanded, boolean leaf, int row, boolean hasFocus) {
                 super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus);
-                String text = value.toString();
-                if (!sel) {
-                    if (text.startsWith("Material ")) {
-                        setForeground(new Color(40, 80, 160));
-                    } else if (text.startsWith("Layer ")) {
-                        if (text.contains("TeamColor")) setForeground(new Color(180, 40, 40));
-                        else if (text.contains("TeamGlow")) setForeground(new Color(200, 140, 0));
-                        else if (text.contains("Additive") || text.contains("AddAlpha"))
-                            setForeground(new Color(0, 130, 80));
+                if (value instanceof DefaultMutableTreeNode dmtn) {
+                    Object userObj = dmtn.getUserObject();
+                    if (userObj instanceof MaterialNodeEntry) {
+                        if (!sel) setForeground(new Color(40, 80, 160));
+                    } else if (userObj instanceof LayerNodeEntry entry) {
+                        if (!sel) {
+                            String text = entry.label();
+                            if (text.contains("TeamColor")) setForeground(new Color(180, 40, 40));
+                            else if (text.contains("TeamGlow")) setForeground(new Color(200, 140, 0));
+                            else if (text.contains("Additive") || text.contains("AddAlpha"))
+                                setForeground(new Color(0, 130, 80));
+                        }
+                        // Eye toggle on the right
+                        if (eyeEnabledIcon != null) {
+                            long key = ((long) entry.materialIdx() << 16) | entry.layerIdx();
+                            boolean enabled = layerEnabled.getOrDefault(key, true);
+                            eyeLabel.setIcon(enabled ? eyeEnabledIcon : eyeDisabledIcon);
+                            layerPanel.removeAll();
+                            layerPanel.add(this, BorderLayout.CENTER);
+                            layerPanel.add(eyeLabel, BorderLayout.EAST);
+                            return layerPanel;
+                        }
                     }
                 }
                 return this;
+            }
+        });
+
+        // Selection listener: highlight geosets that use the selected material
+        tree.addTreeSelectionListener(e -> {
+            TreePath path = e.getNewLeadSelectionPath();
+            if (path == null || previewCanvas == null) {
+                if (previewCanvas != null) previewCanvas.setHighlightedGeosetIndices(null);
+                return;
+            }
+            DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+            Object userObj = node.getUserObject();
+            int matIdx = -1;
+            if (userObj instanceof MaterialNodeEntry me) matIdx = me.materialIdx();
+            else if (userObj instanceof LayerNodeEntry le) matIdx = le.materialIdx();
+            if (matIdx >= 0) {
+                List<Integer> geosets = matToGeosets.getOrDefault(matIdx, List.of());
+                previewCanvas.setHighlightedGeosetIndices(geosets.stream().mapToInt(Integer::intValue).toArray());
+            } else {
+                previewCanvas.setHighlightedGeosetIndices(null);
+            }
+        });
+
+        // Click listener: toggle layer visibility when clicking the eye icon (right side)
+        tree.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                TreePath path = tree.getPathForLocation(e.getX(), e.getY());
+                if (path == null) return;
+                DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+                if (!(node.getUserObject() instanceof LayerNodeEntry entry)) return;
+
+                var bounds = tree.getPathBounds(path);
+                if (bounds == null) return;
+                int relativeX = e.getX() - bounds.x;
+                if (relativeX < bounds.width - ICON_SIZE - 8) return;
+
+                long key = ((long) entry.materialIdx() << 16) | entry.layerIdx();
+                boolean nowEnabled = !layerEnabled.getOrDefault(key, true);
+                layerEnabled.put(key, nowEnabled);
+                if (previewCanvas != null) previewCanvas.setLayerVisible(entry.materialIdx(), entry.layerIdx(), nowEnabled);
+                tree.repaint();
             }
         });
 
