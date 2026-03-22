@@ -49,6 +49,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private float   panY         = 0.0f;
     // Computed AABB center used for camera framing (Z-up model space)
     private float   frameCenterX, frameCenterY, frameCenterZ;
+    // Cached vertex AABB center (Z-up model space), computed by computeVertexBoundsRadius()
+    private float   vertexAABBCenterX, vertexAABBCenterY, vertexAABBCenterZ;
     private boolean wireframe;
     private volatile boolean showExtent;
     private volatile boolean showBones;
@@ -2523,8 +2525,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         float[] m=buildCameraView();
         if(hasRenderableMesh() || animData.hasAnimation()){
             m=rotateX(m,-90f); // WC3 Z-up → OpenGL Y-up
-            m=translate(m,-frameCenterX,-frameCenterY,-frameCenterZ);
             m=scale(m,modelScale);
+            m=translate(m,-frameCenterX,-frameCenterY,-frameCenterZ);
         }
         return m;
     }
@@ -2551,19 +2553,20 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private void applyInitialCameraDistance() {
         if (hasRenderableMesh()) {
             float boundsRadius = resolveInitialBoundsRadius();
-            frameToBounds(boundsRadius);
+            // Use vertex AABB center (already computed by resolveInitialBoundsRadius)
+            frameToBounds(boundsRadius, vertexAABBCenterX, vertexAABBCenterY, vertexAABBCenterZ);
         } else if (animData.hasAnimation()) {
             float boundsRadius = computePivotBoundsRadius();
-            frameToBounds(Math.max(boundsRadius, 100f));
+            frameToBounds(Math.max(boundsRadius, 100f), 0f, 0f, 0f);
         } else {
             modelScale = 1f; distance = 300f; panX = 0f; panY = 0f;
         }
     }
 
-    private void frameToBounds(float boundsRadius) {
-        frameCenterX = 0f;
-        frameCenterY = 0f;
-        frameCenterZ = boundsRadius * 0.5f;
+    private void frameToBounds(float boundsRadius, float cx, float cy, float cz) {
+        frameCenterX = cx;
+        frameCenterY = cy;
+        frameCenterZ = cz;
         modelScale = clamp(120f / boundsRadius, 0.005f, 500f);
         float scaledRadius = boundsRadius * modelScale;
         distance = clamp(scaledRadius * (float) Math.sqrt(2) * 2f,
@@ -2599,9 +2602,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             boundsRadius = computePivotBoundsRadius();
         }
         boundsRadius = clamp(boundsRadius, 0.1f, 10000f);
-        frameToBounds(boundsRadius);
-        panX = 0f;
-        panY = 0f;
+        frameToBounds(boundsRadius, vertexAABBCenterX, vertexAABBCenterY, vertexAABBCenterZ);
         yawDegrees = initialYaw;
         pitchDegrees = initialPitch;
     }
@@ -2611,7 +2612,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
      * "Stand" sequence boundsRadius > "Stand" extent diagonal > vertex AABB > fallback 64.
      */
     private float resolveInitialBoundsRadius() {
-        // Try "Stand" animation extents first
+        // Always compute vertex AABB to populate center fields
+        float vertR = computeVertexBoundsRadius();
+        // Try "Stand" animation extents for the radius
         if (animData != null && animData.sequences() != null) {
             for (SequenceInfo seq : animData.sequences()) {
                 if (seq.name().toLowerCase(java.util.Locale.ROOT).contains("stand")) {
@@ -2620,12 +2623,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 }
             }
         }
-        // Fall back to vertex AABB
-        float r = computeVertexBoundsRadius();
-        return r > 0.1f ? r : 64f;
+        return vertR > 0.1f ? vertR : 64f;
     }
 
-    /** Compute bounding radius from actual vertex positions. */
+    /** Compute AABB from actual vertex positions, store center, return half-diagonal radius. */
     private float computeVertexBoundsRadius() {
         float[] verts = mesh.vertices();
         if (verts.length < 3) return Math.max(30f, mesh.radius());
@@ -2636,6 +2637,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             minY = Math.min(minY, verts[i + 1]); maxY = Math.max(maxY, verts[i + 1]);
             minZ = Math.min(minZ, verts[i + 2]); maxZ = Math.max(maxZ, verts[i + 2]);
         }
+        vertexAABBCenterX = (minX + maxX) * 0.5f;
+        vertexAABBCenterY = (minY + maxY) * 0.5f;
+        vertexAABBCenterZ = (minZ + maxZ) * 0.5f;
         float dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
         return Math.max(30f, (float) Math.sqrt(dx * dx + dy * dy + dz * dz) * 0.5f);
     }

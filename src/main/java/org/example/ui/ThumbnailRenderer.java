@@ -562,8 +562,11 @@ public final class ThumbnailRenderer {
             boundsRadius = mesh.radius();
         }
         boundsRadius = Math.max(30f, Math.min(10000f, boundsRadius));
-        // Camera target at (0, 0, boundsRadius/2) — look at half-height
-        float[] mv = buildThumbnailModelView(0f, 0f, boundsRadius * 0.5f, boundsRadius, cameraYaw, cameraPitch);
+        // Camera target at actual AABB center of (possibly animated) vertices
+        float cx = bMinX <= bMaxX ? (bMinX + bMaxX) * 0.5f : 0f;
+        float cy = bMinX <= bMaxX ? (bMinY + bMaxY) * 0.5f : 0f;
+        float cz = bMinX <= bMaxX ? (bMinZ + bMaxZ) * 0.5f : 0f;
+        float[] mv = buildThumbnailModelView(cx, cy, cz, boundsRadius, cameraYaw, cameraPitch);
         float[] proj = GlPreviewCanvas.buildProjection(45f, 1f, 4f, 10000f);
         float[] mvp = GlPreviewCanvas.matMul(proj, mv);
 
@@ -728,8 +731,8 @@ public final class ThumbnailRenderer {
         mv = GlPreviewCanvas.rotateX(mv, pitch);
         mv = GlPreviewCanvas.rotateY(mv, yaw);
         mv = GlPreviewCanvas.rotateX(mv, -90f); // Z-up -> Y-up
-        mv = GlPreviewCanvas.translate(mv, -cx, -cy, -cz);
         mv = GlPreviewCanvas.scale(mv, modelScale);
+        mv = GlPreviewCanvas.translate(mv, -cx, -cy, -cz);
         return mv;
     }
 
