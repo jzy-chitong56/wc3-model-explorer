@@ -42,7 +42,9 @@ public final class ModelViewerDialog extends JDialog {
     private Timer scrubberSyncTimer;
 
     public ModelViewerDialog(JFrame owner, ModelAsset asset, Path scanRoot) {
-        super(owner, "Model Viewer – " + asset.fileName(), false);
+        super(owner, "Model Viewer – " + asset.fileName()
+                + (asset.metadata().modelName().isEmpty() ? ""
+                   : " (" + asset.metadata().modelName() + ")"), false);
         this.asset = asset;
         this.scanRoot = scanRoot;
         setSize(new Dimension(VIEW_W + DIAG_W, 700));
@@ -546,8 +548,10 @@ public final class ModelViewerDialog extends JDialog {
         String polygons = meta.polygonCount() >= 0
                 ? fmt.format(meta.polygonCount()) : "N/A";
 
+        String mName = meta.modelName();
         String[][] rows = {
                 {"File", asset.fileName()},
+                {"Model Name", mName.isEmpty() ? "N/A" : mName},
                 {"Path", asset.path().toString()},
                 {"Size", formatFileSize(asset.fileSizeBytes())},
                 {"Vertices", fmt.format(mesh.vertices().length / 3)},

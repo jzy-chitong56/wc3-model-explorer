@@ -392,7 +392,9 @@ public final class MainWindow extends JFrame {
         boolean showFavOnly = favoritesToggle.isSelected();
         List<ModelAsset> filtered = allAssets.stream()
                 .filter(asset -> !showFavOnly || settings.isFavorite(asset.path().toAbsolutePath().toString()))
-                .filter(asset -> needle.isEmpty() || asset.fileName().toLowerCase(Locale.ROOT).contains(needle))
+                .filter(asset -> needle.isEmpty()
+                        || asset.fileName().toLowerCase(Locale.ROOT).contains(needle)
+                        || asset.metadata().modelName().toLowerCase(Locale.ROOT).contains(needle))
                 .filter(portraitFilter::allows)
                 .filter(asset -> asset.metadata().hasAnimationContaining(animationNeedle))
                 .filter(asset -> asset.metadata().hasTextureContaining(textureNeedle))
@@ -929,7 +931,13 @@ public final class MainWindow extends JFrame {
                 boolean isFav = settings.isFavorite(asset.path().toAbsolutePath().toString());
                 starLabel.setText(isFav ? "\u2605" : "");
                 NumberFormat format = NumberFormat.getIntegerInstance();
-                titleLabel.setText(asset.fileName());
+                String displayName = asset.fileName();
+                String mName = asset.metadata().modelName();
+                if (!mName.isEmpty() && !mName.equalsIgnoreCase(
+                        displayName.replaceFirst("\\.[^.]+$", ""))) {
+                    displayName = displayName + " (" + mName + ")";
+                }
+                titleLabel.setText(displayName);
                 String polygonInfo = asset.metadata().hasKnownPolygonCount()
                         ? formatPolygonText(asset.metadata().polygonCount(), format)
                         : "poly N/A";
@@ -948,7 +956,10 @@ public final class MainWindow extends JFrame {
 
                 ModelMetadata meta = asset.metadata();
                 NumberFormat fmt = NumberFormat.getIntegerInstance();
-                String tooltip = "<html><b>" + asset.fileName() + "</b><br>"
+                String tooltipName = asset.fileName();
+                String mn = meta.modelName();
+                if (!mn.isEmpty()) tooltipName += " (" + mn + ")";
+                String tooltip = "<html><b>" + tooltipName + "</b><br>"
                         + "Polygons: " + (meta.hasKnownPolygonCount() ? fmt.format(meta.polygonCount()) : "N/A") + "<br>"
                         + "Vertices: " + fmt.format(meta.vertexCount()) + "<br>"
                         + "Bones: " + fmt.format(meta.boneCount()) + "<br>"

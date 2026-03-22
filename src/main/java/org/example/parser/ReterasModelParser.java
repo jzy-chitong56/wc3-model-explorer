@@ -118,10 +118,11 @@ public final class ReterasModelParser {
         int boneCount = (model.bones != null ? model.bones.size() : 0)
                       + (model.helpers != null ? model.helpers.size() : 0);
         int sequenceCount = animNames.size();
+        String modelName = model.name != null ? model.name.trim() : "";
 
         return new ModelMetadata(List.copyOf(animNames), List.copyOf(texturePaths),
                 hasData ? polyCount : ModelMetadata.UNKNOWN_POLYGON_COUNT,
-                vertexCount, boneCount, sequenceCount);
+                vertexCount, boneCount, sequenceCount, modelName);
     }
 
     // ── Mesh ─────────────────────────────────────────────────────────────────
