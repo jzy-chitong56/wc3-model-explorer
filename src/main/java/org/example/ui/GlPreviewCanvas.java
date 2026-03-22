@@ -544,9 +544,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 } else if ((ribbonStates != null || particle2States != null) && animData.bones().length > 0) {
                     // Compute world matrices for ribbon/particle emitters even without mesh animation
                     SequenceInfo seq = animData.sequences().get(currentSeqIdx);
-                    float[] cameraRot = computeCameraRotationQuat();
                     lastWorldMap = BoneAnimator.computeWorldMatrices(
-                            animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), cameraRot);
+                            animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences());
                 }
                 // Only re-sample geoset properties while animation is playing.
                 // When stopped (non-looping, reached end), keep last sampled values
@@ -563,6 +562,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 // Even without a selected sequence, global animations should run
                 sampleLayerAlpha();
                 sampleTextureAnims();
+                // Billboard bones still need camera-facing transform even without a sequence
+                if (animData.bones().length > 0 && animatedVertices != null && hasBillboardBones()) {
+                    uploadAnimatedVerticesNoSequence();
+                }
             }
             if (shadingMode == ShadingMode.GEOSET_COLORS && solidShader != 0 && geoVao != null) {
                 drawGeosetColors(modelMvp);
@@ -679,9 +682,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             if (currentSeqIdx >= 0 && currentSeqIdx < animData.sequences().size()) {
                 advanceAnimation();
                 SequenceInfo seq = animData.sequences().get(currentSeqIdx);
-                float[] cameraRot = computeCameraRotationQuat();
                 lastWorldMap = BoneAnimator.computeWorldMatrices(
-                        animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), cameraRot);
+                        animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences());
                 simulateRibbons(lastDtSec);
                 simulateParticles2(lastDtSec);
             }
@@ -1450,9 +1452,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     private void uploadAnimatedVertices() {
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
-        float[] cameraRot = computeCameraRotationQuat();
+        // Don't pass camera rotation for mesh vertex transformation —
+        // billboard bones just cancel parent rotation (Reteras convention).
+        // Particle/ribbon billboarding is handled separately in computeBillboardVectors().
         Map<Integer, float[]> worldMap = BoneAnimator.computeWorldMatrices(
-                animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), cameraRot);
+                animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences());
         lastWorldMap = worldMap; // cache for ribbon simulation and node names overlay
 
         float[] bindNormals = mesh.normals();
@@ -1498,6 +1502,67 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                         glBindBuffer(GL_ARRAY_BUFFER, geoNormVbo[gi]);
                         glBufferSubData(GL_ARRAY_BUFFER, 0L, nSlice);
                     }
+                }
+                off += vc;
+            }
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
+    /** Check if any bone has a billboard flag set. */
+    private boolean hasBillboardBones() {
+        for (BoneNode b : animData.bones()) {
+            if (b.isBillboarded()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Transform vertices using billboard bone matrices without a selected sequence.
+     * Uses time=0 and dummy sequence range, but still passes camera rotation
+     * so billboard bones face the camera.
+     */
+    private void uploadAnimatedVerticesNoSequence() {
+        Map<Integer, float[]> worldMap = BoneAnimator.computeWorldMatrices(
+                animData.bones(), 0, 0, 0, animData.globalSequences());
+        lastWorldMap = worldMap;
+
+        float[] bindNormals = mesh.normals();
+        int meshVertOffset = 0;
+        for (GeosetSkinData skin : animData.geosets()) {
+            int vc = skin.vertexCount(); if (vc == 0) continue;
+            if (skin.hasSkinning()) {
+                for (int vi = 0; vi < vc; vi++) {
+                    float[] p = transformVertex(skin, vi, worldMap);
+                    int base = (meshVertOffset + vi) * 3;
+                    animatedVertices[base] = p[0]; animatedVertices[base+1] = p[1]; animatedVertices[base+2] = p[2];
+                    float[] n = transformNormal(skin, vi, meshVertOffset, bindNormals, worldMap);
+                    animatedNormals[base] = n[0]; animatedNormals[base+1] = n[1]; animatedNormals[base+2] = n[2];
+                }
+            } else {
+                System.arraycopy(skin.bindVertices(), 0, animatedVertices, meshVertOffset * 3, vc * 3);
+                System.arraycopy(bindNormals, meshVertOffset * 3, animatedNormals, meshVertOffset * 3, vc * 3);
+            }
+            meshVertOffset += vc;
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, meshVbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0L, animatedVertices);
+        glBindBuffer(GL_ARRAY_BUFFER, meshNormVbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0L, animatedNormals);
+
+        if (geoVbo != null && geoVertCount != null) {
+            int off = 0;
+            for (int gi = 0; gi < geoVbo.length; gi++) {
+                int vc = geoVertCount[gi];
+                if (geoVbo[gi] != 0 && vc > 0) {
+                    float[] slice = new float[vc * 3];
+                    System.arraycopy(animatedVertices, off * 3, slice, 0, vc * 3);
+                    glBindBuffer(GL_ARRAY_BUFFER, geoVbo[gi]);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0L, slice);
+                    float[] nSlice = new float[vc * 3];
+                    System.arraycopy(animatedNormals, off * 3, nSlice, 0, vc * 3);
+                    glBindBuffer(GL_ARRAY_BUFFER, geoNormVbo[gi]);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0L, nSlice);
                 }
                 off += vc;
             }
