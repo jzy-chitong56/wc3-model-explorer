@@ -1277,6 +1277,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     private void sampleGeosetAlpha() {
         if (geosetAlphaValues == null) return;
+        if (currentSeqIdx < 0 || currentSeqIdx >= animData.sequences().size()) return;
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
         long[] globalSeqs = animData.globalSequences();
         for (int gi = 0; gi < geosetAlphaValues.length; gi++) {
@@ -1296,6 +1297,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     private void sampleLayerAlpha() {
         if (layerAlphaValues == null) return;
+        if (currentSeqIdx < 0 || currentSeqIdx >= animData.sequences().size()) return;
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
         long[] globalSeqs = animData.globalSequences();
         for (int gi = 0; gi < layerAlphaValues.length; gi++) {
@@ -1317,6 +1319,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     private void sampleGeosetColor() {
         if (geosetColorValues == null) return;
+        if (currentSeqIdx < 0 || currentSeqIdx >= animData.sequences().size()) return;
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
         long[] globalSeqs = animData.globalSequences();
         for (int gi = 0; gi < geosetColorValues.length; gi++) {
