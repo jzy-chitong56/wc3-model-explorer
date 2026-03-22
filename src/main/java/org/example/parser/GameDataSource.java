@@ -31,6 +31,7 @@ public final class GameDataSource {
 
     private final List<DataSource> sources  = new CopyOnWriteArrayList<>();
     private final ConcurrentHashMap<String, BufferedImage> cache = new ConcurrentHashMap<>();
+    private volatile DataSource mapSource; // transient source for currently-opened map archive
 
     private GameDataSource() {}
 
@@ -62,7 +63,13 @@ public final class GameDataSource {
         for (String mpqPath : settings.mpqPaths()) {
             if (mpqPath == null || mpqPath.isBlank()) continue;
             try {
-                JMpqEditor editor = new JMpqEditor(Path.of(mpqPath).toFile(), MPQOpenOption.READ_ONLY);
+                JMpqEditor editor;
+                try {
+                    editor = new JMpqEditor(Path.of(mpqPath).toFile(), MPQOpenOption.READ_ONLY);
+                } catch (Exception ex) {
+                    editor = new JMpqEditor(Path.of(mpqPath).toFile(), MPQOpenOption.READ_ONLY, MPQOpenOption.FORCE_V0);
+                    System.out.println("[GameDataSource] Opened MPQ with FORCE_V0: " + mpqPath);
+                }
                 sources.add(new MpqDataSource(editor));
                 System.out.println("[GameDataSource] Opened MPQ: " + mpqPath);
             } catch (Exception ex) {
@@ -72,8 +79,25 @@ public final class GameDataSource {
     }
 
     public synchronized void close() {
+        clearMapSource();
         closeSources();
         cache.clear();
+    }
+
+    /** Sets a transient map archive source (checked before CASC/MPQ). */
+    public synchronized void setMapSource(DataSource source) {
+        clearMapSource();
+        mapSource = source;
+        cache.clear();
+    }
+
+    /** Removes the transient map archive source. */
+    public synchronized void clearMapSource() {
+        if (mapSource != null) {
+            try { mapSource.close(); } catch (Exception ignored) {}
+            mapSource = null;
+            cache.clear();
+        }
     }
 
     private void closeSources() {
@@ -114,9 +138,15 @@ public final class GameDataSource {
 
         BufferedImage img = null;
         for (String variant : variants) {
+            // Map source first (custom textures in map override everything)
+            DataSource ms = mapSource;
+            if (ms != null) {
+                img = tryLoadFromSource(ms, variant);
+                if (img != null) break;
+            }
             // 1 + 2 – filesystem lookups
             img = loadFromDisk(variant, modelDir, rootDir);
-            // 3+4 – archive sources
+            // 3+4 – archive sources (CASC, MPQ)
             if (img == null) {
                 img = loadFromSources(variant);
             }
@@ -131,7 +161,7 @@ public final class GameDataSource {
 
     /** Returns true if any archive source is open. */
     public boolean hasArchive() {
-        return !sources.isEmpty();
+        return mapSource != null || !sources.isEmpty();
     }
 
     /**
@@ -146,7 +176,13 @@ public final class GameDataSource {
         String lower = normalised.toLowerCase(Locale.ROOT);
         String lowerBackslash = lower.replace('/', '\\');
 
-        for (DataSource src : sources) {
+        // Build list of sources to check: map source first, then regular sources
+        List<DataSource> allSources = new ArrayList<>();
+        DataSource ms = mapSource;
+        if (ms != null) allSources.add(ms);
+        allSources.addAll(sources);
+
+        for (DataSource src : allSources) {
             for (String variant : new String[]{normalised, backslash, lower, lowerBackslash}) {
                 if (!src.has(variant)) continue;
                 try (InputStream is = src.getResourceAsStream(variant)) {
@@ -209,12 +245,21 @@ public final class GameDataSource {
         String normalised = texturePath.replace('\\', '/');
         String[] variants = extensionVariants(normalised);
 
+        // Map source takes priority
+        DataSource ms = mapSource;
+        if (ms != null) {
+            for (String variant : variants) {
+                String bs = variant.replace('/', '\\');
+                String lo = variant.toLowerCase(Locale.ROOT);
+                String lbs = lo.replace('/', '\\');
+                if (ms.has(variant) || ms.has(bs) || ms.has(lo) || ms.has(lbs)) return "MAP";
+            }
+        }
         for (String variant : variants) {
             if (existsOnDisk(variant, modelDir, rootDir)) return "DISK";
         }
         for (String variant : variants) {
             if (existsInSources(variant)) {
-                // Distinguish CASC vs MPQ based on source type
                 return findSourceType(variant);
             }
         }
@@ -247,6 +292,9 @@ public final class GameDataSource {
         String backslash      = normalised.replace('/', '\\');
         String lower          = normalised.toLowerCase(Locale.ROOT);
         String lowerBackslash = lower.replace('/', '\\');
+        DataSource ms = mapSource;
+        if (ms != null && (ms.has(normalised) || ms.has(backslash)
+                || ms.has(lower) || ms.has(lowerBackslash))) return true;
         for (DataSource src : sources) {
             if (src.has(normalised) || src.has(backslash)
                     || src.has(lower) || src.has(lowerBackslash)) return true;
@@ -258,6 +306,9 @@ public final class GameDataSource {
         String backslash      = normalised.replace('/', '\\');
         String lower          = normalised.toLowerCase(Locale.ROOT);
         String lowerBackslash = lower.replace('/', '\\');
+        DataSource ms = mapSource;
+        if (ms != null && (ms.has(normalised) || ms.has(backslash)
+                || ms.has(lower) || ms.has(lowerBackslash))) return "MAP";
         for (DataSource src : sources) {
             if (src.has(normalised) || src.has(backslash)
                     || src.has(lower) || src.has(lowerBackslash)) {
@@ -336,6 +387,16 @@ public final class GameDataSource {
         String lower          = normalised.toLowerCase(Locale.ROOT);
         String lowerBackslash = lower.replace('/', '\\');
 
+        // Check map source first (highest priority for map-embedded textures)
+        DataSource ms = mapSource;
+        if (ms != null) {
+            BufferedImage img = tryLoad(ms, normalised);
+            if (img == null) img = tryLoad(ms, backslash);
+            if (img == null) img = tryLoad(ms, lower);
+            if (img == null) img = tryLoad(ms, lowerBackslash);
+            if (img != null) return img;
+        }
+
         for (DataSource src : sources) {
             BufferedImage img = tryLoad(src, normalised);
             if (img == null) img = tryLoad(src, backslash);
@@ -374,6 +435,14 @@ public final class GameDataSource {
             if (src instanceof CascDataSource) hasCasc = true;
         }
         return hasCasc;
+    }
+
+    private static BufferedImage tryLoadFromSource(DataSource src, String normalised) {
+        BufferedImage img = tryLoad(src, normalised);
+        if (img == null) img = tryLoad(src, normalised.replace('/', '\\'));
+        if (img == null) img = tryLoad(src, normalised.toLowerCase(Locale.ROOT));
+        if (img == null) img = tryLoad(src, normalised.toLowerCase(Locale.ROOT).replace('/', '\\'));
+        return img;
     }
 
     private static BufferedImage tryLoad(DataSource src, String path) {

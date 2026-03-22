@@ -66,6 +66,7 @@ import java.util.stream.Collectors;
 public final class MainWindow extends JFrame {
     /** Shared last-used directory for all file choosers in the app. */
     static java.io.File lastChooserDir;
+    private MapArchiveSource currentMapSource;
 
     private final JTextField rootField = new JTextField();
     private final JTextField searchField = new JTextField();
@@ -111,6 +112,11 @@ public final class MainWindow extends JFrame {
             @Override
             public void windowClosing(WindowEvent e) {
                 if (thumbnailRenderer != null) thumbnailRenderer.shutdown();
+                if (currentMapSource != null) {
+                    currentMapSource.close();
+                    currentMapSource = null;
+                }
+                GameDataSource.getInstance().clearMapSource();
             }
         });
     }
@@ -251,19 +257,30 @@ public final class MainWindow extends JFrame {
 
     private void chooseDirectory() {
         JFileChooser chooser = new JFileChooser();
-        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        chooser.setAcceptAllFileFilterUsed(false);
+        chooser.setFileSelectionMode(JFileChooser.FILES_AND_DIRECTORIES);
+        chooser.setAcceptAllFileFilterUsed(true);
+        chooser.addChoosableFileFilter(
+                new javax.swing.filechooser.FileNameExtensionFilter(
+                        "WC3 Maps (*.w3x, *.w3m)", "w3x", "w3m"));
         String rootText = rootField.getText().trim();
         if (!rootText.isEmpty()) {
-            try { chooser.setCurrentDirectory(Path.of(rootText).toFile()); }
-            catch (InvalidPathException ignored) {}
+            try {
+                Path rootPath = Path.of(rootText);
+                // For map files, start in the parent directory
+                if (java.nio.file.Files.isRegularFile(rootPath)) {
+                    chooser.setCurrentDirectory(rootPath.getParent().toFile());
+                } else {
+                    chooser.setCurrentDirectory(rootPath.toFile());
+                }
+            } catch (InvalidPathException ignored) {}
         } else if (lastChooserDir != null) {
             chooser.setCurrentDirectory(lastChooserDir);
         }
         int result = chooser.showOpenDialog(this);
         if (result == JFileChooser.APPROVE_OPTION) {
-            lastChooserDir = chooser.getSelectedFile();
-            rootField.setText(chooser.getSelectedFile().toPath().toString());
+            File selected = chooser.getSelectedFile();
+            lastChooserDir = selected.isDirectory() ? selected : selected.getParentFile();
+            rootField.setText(selected.toPath().toString());
             saveCurrentRootDirectory();
             startScan(false);
         }
@@ -272,7 +289,7 @@ public final class MainWindow extends JFrame {
     private void startScan(boolean forceRefresh) {
         String rootText = rootField.getText().trim();
         if (rootText.isEmpty()) {
-            statusLabel.setText("Please choose a directory");
+            statusLabel.setText("Please choose a directory or map file");
             return;
         }
 
@@ -280,7 +297,7 @@ public final class MainWindow extends JFrame {
         try {
             root = Path.of(rootText);
         } catch (InvalidPathException ex) {
-            statusLabel.setText("Invalid directory path");
+            statusLabel.setText("Invalid path");
             return;
         }
         saveCurrentRootDirectory();
@@ -297,15 +314,43 @@ public final class MainWindow extends JFrame {
             if (forceRefresh) thumbnailRenderer.clearCache();
         }
 
+        final boolean isMap = MapArchiveSource.isMapFile(root);
+
         SwingWorker<List<ModelAsset>, String> worker = new SwingWorker<>() {
             @Override
             protected List<ModelAsset> doInBackground() throws Exception {
-                return ModelScanner.scan(root, forceRefresh, (done, total) -> {
-                    // Throttle UI updates to avoid EDT flooding
-                    if (done % 5 == 0 || done == total) {
-                        publish("Parsing models... " + done + " / " + total);
+                if (isMap) {
+                    publish("Opening map archive...");
+                    // Close previous map source
+                    if (currentMapSource != null) {
+                        currentMapSource.close();
+                        currentMapSource = null;
                     }
-                });
+                    GameDataSource.getInstance().clearMapSource();
+
+                    MapArchiveSource mapSource = MapArchiveSource.open(root);
+                    currentMapSource = mapSource;
+                    GameDataSource.getInstance().setMapSource(mapSource.getDataSource());
+
+                    return ModelScanner.scan(mapSource.getTempDir(), true, (done, total) -> {
+                        if (done % 5 == 0 || done == total) {
+                            publish("Parsing models... " + done + " / " + total);
+                        }
+                    });
+                } else {
+                    // Directory mode — clear any previous map source
+                    if (currentMapSource != null) {
+                        currentMapSource.close();
+                        currentMapSource = null;
+                    }
+                    GameDataSource.getInstance().clearMapSource();
+
+                    return ModelScanner.scan(root, forceRefresh, (done, total) -> {
+                        if (done % 5 == 0 || done == total) {
+                            publish("Parsing models... " + done + " / " + total);
+                        }
+                    });
+                }
             }
 
             @Override
@@ -323,12 +368,8 @@ public final class MainWindow extends JFrame {
                     applyFilter();
                 } catch (Exception ex) {
                     statusLabel.setText("Scan failed");
-                    JOptionPane.showMessageDialog(
-                            MainWindow.this,
-                            "Failed to scan directory:\n" + ex.getMessage(),
-                            "Scan Error",
-                            JOptionPane.ERROR_MESSAGE
-                    );
+                    showErrorDialog(MainWindow.this,
+                            "Failed to scan:\n" + ex.getMessage(), "Scan Error");
                 }
             }
         };
@@ -399,6 +440,7 @@ public final class MainWindow extends JFrame {
     }
 
     private Path currentScanRoot() {
+        if (currentMapSource != null) return currentMapSource.getTempDir();
         String rootText = rootField.getText().trim();
         if (rootText.isEmpty()) {
             return null;
@@ -499,9 +541,8 @@ public final class MainWindow extends JFrame {
             }
             new ProcessBuilder(args).start();
         } catch (Exception ex) {
-            javax.swing.JOptionPane.showMessageDialog(this,
-                    "Failed to launch " + program.name() + ":\n" + ex.getMessage(),
-                    "Error", javax.swing.JOptionPane.ERROR_MESSAGE);
+            showErrorDialog(this,
+                    "Failed to launch " + program.name() + ":\n" + ex.getMessage(), "Error");
         }
     }
 
@@ -585,14 +626,12 @@ public final class MainWindow extends JFrame {
     }
 
     private void showModelDetails(ModelAsset asset) {
-        Path scanRoot = null;
-        String rootText = rootField.getText().trim();
-        if (!rootText.isEmpty()) {
-            try { scanRoot = Path.of(rootText); } catch (InvalidPathException ignored) {}
+        Path scanRoot = currentScanRoot();
+        // Record as recent (skip temp paths from map archives)
+        if (currentMapSource == null) {
+            settings.addRecentModel(asset.path().toAbsolutePath().toString());
+            settings.save();
         }
-        // Record as recent
-        settings.addRecentModel(asset.path().toAbsolutePath().toString());
-        settings.save();
 
         ModelViewerDialog dialog = new ModelViewerDialog(this, asset, scanRoot);
         dialog.setLocationRelativeTo(this);
@@ -614,8 +653,7 @@ public final class MainWindow extends JFrame {
             item.addActionListener(e -> {
                 try {
                     if (!java.nio.file.Files.exists(p)) {
-                        JOptionPane.showMessageDialog(this, "File not found:\n" + absPath,
-                                "Error", JOptionPane.ERROR_MESSAGE);
+                        showErrorDialog(this, "File not found:\n" + absPath, "Error");
                         return;
                     }
                     long size = java.nio.file.Files.size(p);
@@ -623,8 +661,7 @@ public final class MainWindow extends JFrame {
                     ModelAsset asset = new ModelAsset(p, size, meta);
                     showModelDetails(asset);
                 } catch (Exception ex) {
-                    JOptionPane.showMessageDialog(this, "Failed to open model:\n" + ex.getMessage(),
-                            "Error", JOptionPane.ERROR_MESSAGE);
+                    showErrorDialog(this, "Failed to open model:\n" + ex.getMessage(), "Error");
                 }
             });
             popup.add(item);
@@ -644,13 +681,7 @@ public final class MainWindow extends JFrame {
         ensureThumbnailRenderer();
         thumbnailRenderer.cancelPending();
 
-        // Resolve scan root for texture loading
-        Path scanRoot = null;
-        String rootText = rootField.getText().trim();
-        if (!rootText.isEmpty()) {
-            try { scanRoot = Path.of(rootText); } catch (InvalidPathException ignored) {}
-        }
-        final Path root = scanRoot;
+        final Path root = currentScanRoot();
 
         pendingThumbnails = 0;
         totalThumbnails = 0;
@@ -1090,5 +1121,26 @@ public final class MainWindow extends JFrame {
             g2.dispose();
             super.paintComponent(g);
         }
+    }
+
+    /** Shows an error dialog with selectable/copyable message text. */
+    static void showErrorDialog(Component parent, String message, String title) {
+        javax.swing.JTextArea textArea = new javax.swing.JTextArea(message);
+        textArea.setEditable(false);
+        textArea.setLineWrap(true);
+        textArea.setWrapStyleWord(true);
+        textArea.setBackground(javax.swing.UIManager.getColor("Panel.background"));
+        textArea.setFont(javax.swing.UIManager.getFont("Label.font"));
+        textArea.setBorder(null);
+        textArea.setColumns(40);
+        // Let the text area size itself, then cap height
+        textArea.setSize(textArea.getPreferredSize());
+        int rows = Math.min(textArea.getLineCount(), 20);
+        textArea.setRows(rows);
+        JScrollPane scroll = new JScrollPane(textArea);
+        scroll.setBorder(null);
+        scroll.setPreferredSize(new Dimension(450,
+                Math.min(textArea.getPreferredSize().height + 10, 400)));
+        JOptionPane.showMessageDialog(parent, scroll, title, JOptionPane.ERROR_MESSAGE);
     }
 }

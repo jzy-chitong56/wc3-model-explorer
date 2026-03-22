@@ -226,8 +226,7 @@ public final class ModelViewerDialog extends JDialog {
                         try {
                             ImageIO.write(img, "PNG", file);
                         } catch (Exception ex) {
-                            JOptionPane.showMessageDialog(this, "Failed to save screenshot:\n" + ex.getMessage(),
-                                    "Error", JOptionPane.ERROR_MESSAGE);
+                            MainWindow.showErrorDialog(this, "Failed to save screenshot:\n" + ex.getMessage(), "Error");
                         }
                     }
                 });
