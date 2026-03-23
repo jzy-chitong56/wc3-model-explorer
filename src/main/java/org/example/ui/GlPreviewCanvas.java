@@ -63,6 +63,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile int     highlightedBoneId = -1; // objectId of hovered node, -1 = none
     private volatile int     highlightedGeosetIdx = -1; // geoset index to highlight, -1 = none
     private volatile int[]   highlightedGeosetIndices; // multiple geosets to highlight (e.g. for material selection)
+    private volatile boolean highlightWireframe = false; // true = wireframe highlight, false = filled overlay
     private volatile float bgR = 0.06f, bgG = 0.08f, bgB = 0.11f;
     private int     lastMouseX, lastMouseY;
     private boolean draggingOrbit, draggingPan;
@@ -951,7 +952,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glUseProgram(0);
     }
 
-    /** Draws a semi-transparent overlay on the entire highlighted geoset. */
+    /** Draws a highlight on the entire highlighted geoset (overlay or wireframe). */
     private void drawGeosetHighlight(float[] mvp) {
         int gi = highlightedGeosetIdx;
         if (gi < 0 || gi >= geoVao.length || geoVao[gi] == 0 || geoIndexCount[gi] == 0) return;
@@ -959,18 +960,29 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glUseProgram(solidShader);
         glUniformMatrix4fv(solidMvp, false, mvp);
         glUniform3f(solidColor, 1.0f, 0.6f, 0.15f); // warm orange highlight
-        glUniform1f(solidAlpha, 0.45f);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(false);
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(-1f, -1f);
-
         glBindVertexArray(geoVao[gi]);
-        glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
 
-        glDisable(GL_POLYGON_OFFSET_FILL);
-        glDepthMask(true);
+        if (highlightWireframe) {
+            glUniform1f(solidAlpha, 1.0f);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            glLineWidth(2.0f);
+            glEnable(GL_POLYGON_OFFSET_LINE);
+            glPolygonOffset(-1f, -1f);
+            glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
+            glDisable(GL_POLYGON_OFFSET_LINE);
+            glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
+        } else {
+            glUniform1f(solidAlpha, 0.45f);
+            glDepthMask(false);
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(-1f, -1f);
+            glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
+            glDisable(GL_POLYGON_OFFSET_FILL);
+            glDepthMask(true);
+        }
+
         glDisable(GL_BLEND);
         glUniform1f(solidAlpha, 1.0f);
         glBindVertexArray(0);
@@ -1676,6 +1688,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public void setNodeSize(float s)         { nodeSize = Math.max(0.5f, Math.min(20f, s)); }
     public void setHighlightedBoneId(int id)    { highlightedBoneId = id; }
     public void setHighlightedGeosetIdx(int gi) { highlightedGeosetIdx = gi; }
+    public void setHighlightWireframe(boolean wireframe) { highlightWireframe = wireframe; }
     public void setHighlightedGeosetIndices(int[] indices) { highlightedGeosetIndices = indices; }
     public void setGeosetVisible(int gi, boolean visible) {
         if (geosetVisibility == null && texData != null) {

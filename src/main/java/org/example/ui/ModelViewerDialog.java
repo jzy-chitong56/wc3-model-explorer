@@ -32,8 +32,8 @@ import java.io.File;
  * Layout reproduces the structure of War3AdvancedModelViewer's ModelDetailDialog.
  */
 public final class ModelViewerDialog extends JDialog {
-    private static final int VIEW_W = 800;
-    private static final int DIAG_W = 360;
+    private static final int VIEW_W = 850;
+    private static final int DIAG_W = 550;
 
     private final GlPreviewCanvas previewCanvas;
     private final ReterasParsedModel parsedModel;
@@ -250,6 +250,7 @@ public final class ModelViewerDialog extends JDialog {
         tabs.addTab("Textures", buildTexturesTab());
         tabs.addTab("Materials", buildMaterialsTab());
         tabs.addTab("Geosets", buildGeosetsTab());
+        tabs.addTab("UV Map", buildUVMapTab());
         if (parsedModel.animData().bones().length > 0) {
             tabs.addTab("Nodes", buildNodesTab());
         }
@@ -260,7 +261,10 @@ public final class ModelViewerDialog extends JDialog {
             int idx = tabs.getSelectedIndex();
             String title = idx >= 0 ? tabs.getTitleAt(idx) : "";
             if (!"Materials".equals(title)) previewCanvas.setHighlightedGeosetIndices(null);
-            if (!"Geosets".equals(title))   previewCanvas.setHighlightedGeosetIdx(-1);
+            if (!"Geosets".equals(title) && !"UV Map".equals(title)) {
+                previewCanvas.setHighlightedGeosetIdx(-1);
+                previewCanvas.setHighlightWireframe(false);
+            }
             if (!"Nodes".equals(title))     previewCanvas.setHighlightedBoneId(-1);
         });
 
@@ -1113,6 +1117,341 @@ public final class ModelViewerDialog extends JDialog {
 
     private record GeosetEntry(int geosetIdx, String texturePath, String detail) {
         @Override public String toString() { return "Geoset " + geosetIdx; }
+    }
+
+    // ── UV Map tab ────────────────────────────────────────────────────────
+
+    private boolean uvMapTabActive = false;
+
+    private JPanel buildUVMapTab() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(new EmptyBorder(4, 4, 4, 4));
+
+        GeosetTexData[] texData = parsedModel.texData();
+        ModelAnimData animData = parsedModel.animData();
+        ModelMesh mesh = parsedModel.mesh();
+
+        // Build per-geoset local indices (same logic as GlPreviewCanvas.buildPerGeosetVaos)
+        int geoCount = texData.length;
+        int[][] perGeoIndices = new int[geoCount][];
+        int[] perGeoVertOffset = new int[geoCount];
+        {
+            int[] allIndices = mesh.indices();
+            int vertOffset = 0, indexOffset = 0, gi = 0;
+            for (GeosetSkinData skin : animData.geosets()) {
+                int vc = skin.vertexCount();
+                if (vc == 0) continue;
+                if (gi >= geoCount) break;
+                perGeoVertOffset[gi] = vertOffset;
+                int faceCount = 0;
+                for (int ii = indexOffset; ii < allIndices.length; ii++) {
+                    if (allIndices[ii] >= vertOffset && allIndices[ii] < vertOffset + vc) faceCount++;
+                    else break;
+                }
+                if (faceCount > 0) {
+                    int[] indices = new int[faceCount];
+                    for (int ii = 0; ii < faceCount; ii++) indices[ii] = allIndices[indexOffset + ii] - vertOffset;
+                    perGeoIndices[gi] = indices;
+                    indexOffset += faceCount;
+                }
+                vertOffset += vc;
+                gi++;
+            }
+        }
+
+        // Geoset selector combo
+        JComboBox<String> geoCombo = new JComboBox<>();
+        for (int gi = 0; gi < geoCount; gi++) {
+            String texName = texData[gi].texturePath();
+            if (texName.isEmpty()) texName = "(no texture)";
+            int sep = Math.max(texName.lastIndexOf('\\'), texName.lastIndexOf('/'));
+            if (sep >= 0) texName = texName.substring(sep + 1);
+            geoCombo.addItem("Geoset " + gi + " — " + texName);
+        }
+
+        // Options row
+        JCheckBox alphaToggle = new JCheckBox("Alpha", false);
+        alphaToggle.setToolTipText("Show texture transparency with checkerboard background");
+        JCheckBox highlightToggle = new JCheckBox("Highlight", true);
+        highlightToggle.setToolTipText("Highlight selected geoset in 3D view");
+        JComboBox<String> highlightMode = new JComboBox<>(new String[]{"Overlay", "Wireframe"});
+        highlightMode.setToolTipText("3D highlight style");
+
+        JPanel topPanel = new JPanel();
+        topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
+
+        JPanel geoRow = new JPanel(new BorderLayout(4, 0));
+        geoRow.add(new JLabel("Geoset: "), BorderLayout.WEST);
+        geoRow.add(geoCombo, BorderLayout.CENTER);
+
+        JCheckBox vertexDotsToggle = new JCheckBox("Vertices", false);
+        vertexDotsToggle.setToolTipText("Show UV vertex positions as dots");
+
+        JPanel optRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        optRow.add(alphaToggle);
+        optRow.add(vertexDotsToggle);
+        optRow.add(highlightToggle);
+        optRow.add(highlightMode);
+
+        topPanel.add(geoRow);
+        topPanel.add(optRow);
+        topPanel.setBorder(new EmptyBorder(0, 0, 4, 0));
+        panel.add(topPanel, BorderLayout.NORTH);
+
+        // Texture + UV cache
+        BufferedImage[] cachedTex = {null};
+        int[] selectedGeo = {-1};
+        Path modelDir = asset.path().getParent();
+
+        // Zoom/pan state
+        float[] zoom = {1.0f};
+        float[] panOffX = {0f}, panOffY = {0f};
+        int[] lastDragX = {0}, lastDragY = {0};
+        boolean[] dragging = {false};
+
+        // UV drawing panel
+        JPanel uvPanel = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                int gi = selectedGeo[0];
+                if (gi < 0 || gi >= geoCount) return;
+
+                int pw = getWidth(), ph = getHeight();
+                int baseSize = Math.min(pw, ph);
+                float z = zoom[0];
+                int size = (int) (baseSize * z);
+                int ox = (pw - baseSize) / 2 + (int) panOffX[0] - (size - baseSize) / 2;
+                int oy = (ph - baseSize) / 2 + (int) panOffY[0] - (size - baseSize) / 2;
+
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.clipRect(0, 0, pw, ph);
+
+                // Draw texture background
+                if (alphaToggle.isSelected()) {
+                    int cs = Math.max(4, (int) (8 * z));
+                    for (int cy2 = Math.max(0, oy); cy2 < Math.min(ph, oy + size); cy2 += cs) {
+                        for (int cx2 = Math.max(0, ox); cx2 < Math.min(pw, ox + size); cx2 += cs) {
+                            boolean light = ((cx2 - ox) / cs + (cy2 - oy) / cs) % 2 == 0;
+                            g2.setColor(light ? new Color(180, 180, 180) : new Color(120, 120, 120));
+                            g2.fillRect(cx2, cy2, Math.min(cs, ox + size - cx2), Math.min(cs, oy + size - cy2));
+                        }
+                    }
+                }
+                if (cachedTex[0] != null) {
+                    g2.drawImage(cachedTex[0], ox, oy, size, size, null);
+                } else if (!alphaToggle.isSelected()) {
+                    g2.setColor(new Color(40, 40, 40));
+                    g2.fillRect(ox, oy, size, size);
+                }
+
+                // Draw UV wireframe — deduplicate edges to prevent color stacking
+                float[] uvs = texData[gi].uvs();
+                int[] indices = perGeoIndices[gi];
+                if (uvs != null && indices != null && indices.length >= 3) {
+                    // Collect unique edges (ordered pair of vertex indices)
+                    java.util.Set<Long> drawnEdges = new java.util.HashSet<>();
+                    g2.setColor(new Color(0, 255, 0, 180));
+                    g2.setStroke(new BasicStroke(1.0f));
+                    for (int t = 0; t + 2 < indices.length; t += 3) {
+                        int i0 = indices[t], i1 = indices[t + 1], i2 = indices[t + 2];
+                        if (i0 * 2 + 1 >= uvs.length || i1 * 2 + 1 >= uvs.length || i2 * 2 + 1 >= uvs.length)
+                            continue;
+                        int x0 = ox + (int) (uvs[i0 * 2] * size), y0 = oy + (int) (uvs[i0 * 2 + 1] * size);
+                        int x1 = ox + (int) (uvs[i1 * 2] * size), y1 = oy + (int) (uvs[i1 * 2 + 1] * size);
+                        int x2 = ox + (int) (uvs[i2 * 2] * size), y2 = oy + (int) (uvs[i2 * 2 + 1] * size);
+                        drawEdgeOnce(g2, drawnEdges, i0, i1, x0, y0, x1, y1);
+                        drawEdgeOnce(g2, drawnEdges, i1, i2, x1, y1, x2, y2);
+                        drawEdgeOnce(g2, drawnEdges, i2, i0, x2, y2, x0, y0);
+                    }
+
+                    // Draw vertex dots
+                    if (vertexDotsToggle.isSelected()) {
+                        g2.setColor(new Color(255, 255, 0, 220));
+                        int dotSize = Math.max(2, (int) (3 * z));
+                        java.util.Set<Integer> drawnVerts = new java.util.HashSet<>();
+                        for (int idx : indices) {
+                            if (idx * 2 + 1 >= uvs.length || !drawnVerts.add(idx)) continue;
+                            int vx = ox + (int) (uvs[idx * 2] * size);
+                            int vy = oy + (int) (uvs[idx * 2 + 1] * size);
+                            g2.fillOval(vx - dotSize / 2, vy - dotSize / 2, dotSize, dotSize);
+                        }
+                    }
+                }
+
+                // Draw UV space border
+                g2.setColor(Color.GRAY);
+                g2.drawRect(ox, oy, size, size);
+                g2.dispose();
+            }
+        };
+        uvPanel.setBackground(Color.DARK_GRAY);
+
+        // Zoom with mouse wheel
+        uvPanel.addMouseWheelListener(e -> {
+            float oldZoom = zoom[0];
+            if (e.getWheelRotation() < 0) zoom[0] = Math.min(zoom[0] * 1.15f, 20f);
+            else zoom[0] = Math.max(zoom[0] / 1.15f, 0.5f);
+            // Zoom toward mouse position
+            float zoomRatio = zoom[0] / oldZoom;
+            int mx = e.getX() - uvPanel.getWidth() / 2;
+            int my = e.getY() - uvPanel.getHeight() / 2;
+            panOffX[0] = (panOffX[0] - mx) * zoomRatio + mx;
+            panOffY[0] = (panOffY[0] - my) * zoomRatio + my;
+            uvPanel.repaint();
+        });
+
+        // Pan with right-click drag, double-right-click to reset
+        uvPanel.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mousePressed(java.awt.event.MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e) || SwingUtilities.isMiddleMouseButton(e)) {
+                    dragging[0] = true;
+                    lastDragX[0] = e.getX();
+                    lastDragY[0] = e.getY();
+                }
+            }
+            @Override public void mouseReleased(java.awt.event.MouseEvent e) { dragging[0] = false; }
+            @Override public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e) && e.getClickCount() == 2) {
+                    zoom[0] = 1.0f; panOffX[0] = 0f; panOffY[0] = 0f;
+                    uvPanel.repaint();
+                }
+            }
+        });
+        uvPanel.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override public void mouseDragged(java.awt.event.MouseEvent e) {
+                if (dragging[0]) {
+                    panOffX[0] += e.getX() - lastDragX[0];
+                    panOffY[0] += e.getY() - lastDragY[0];
+                    lastDragX[0] = e.getX();
+                    lastDragY[0] = e.getY();
+                    uvPanel.repaint();
+                }
+            }
+        });
+
+        // Layer selector for multi-layer geosets
+        JComboBox<String> layerCombo = new JComboBox<>();
+        JPanel layerRow = new JPanel(new BorderLayout(4, 0));
+        layerRow.setBorder(new EmptyBorder(4, 0, 0, 0));
+        layerRow.add(new JLabel("Layer: "), BorderLayout.WEST);
+        layerRow.add(layerCombo, BorderLayout.CENTER);
+        layerRow.setVisible(false);
+
+        JPanel bottomRow = new JPanel(new BorderLayout());
+        bottomRow.add(layerRow, BorderLayout.NORTH);
+
+        JLabel infoLabel = new JLabel(" ", SwingConstants.CENTER);
+        infoLabel.setFont(infoLabel.getFont().deriveFont(Font.PLAIN, 10f));
+        infoLabel.setBorder(new EmptyBorder(2, 0, 0, 0));
+        bottomRow.add(infoLabel, BorderLayout.SOUTH);
+
+        panel.add(uvPanel, BorderLayout.CENTER);
+        panel.add(bottomRow, BorderLayout.SOUTH);
+
+        // Apply highlight to 3D view based on current settings
+        Runnable applyHighlight = () -> {
+            if (previewCanvas == null) return;
+            if (!uvMapTabActive || !highlightToggle.isSelected()) {
+                previewCanvas.setHighlightedGeosetIdx(-1);
+                previewCanvas.setHighlightWireframe(false);
+                return;
+            }
+            int gi = geoCombo.getSelectedIndex();
+            previewCanvas.setHighlightWireframe("Wireframe".equals(highlightMode.getSelectedItem()));
+            previewCanvas.setHighlightedGeosetIdx(gi);
+        };
+
+        // Selection handler
+        Runnable updateUV = () -> {
+            int gi = geoCombo.getSelectedIndex();
+            selectedGeo[0] = gi;
+            if (gi < 0 || gi >= geoCount) {
+                cachedTex[0] = null;
+                layerRow.setVisible(false);
+                infoLabel.setText(" ");
+                uvPanel.repaint();
+                return;
+            }
+
+            // Update layer combo
+            var layers = texData[gi].layers();
+            layerCombo.removeAllItems();
+            if (layers.size() > 1) {
+                for (int li = 0; li < layers.size(); li++) {
+                    var layer = layers.get(li);
+                    String name = layer.texturePath();
+                    int sep = Math.max(name.lastIndexOf('\\'), name.lastIndexOf('/'));
+                    if (sep >= 0) name = name.substring(sep + 1);
+                    layerCombo.addItem("Layer " + li + " — " + name);
+                }
+                layerRow.setVisible(true);
+            } else {
+                layerRow.setVisible(false);
+            }
+
+            // Load texture
+            String texPath = texData[gi].texturePath();
+            if (!texPath.isEmpty()) {
+                cachedTex[0] = GameDataSource.getInstance().loadTexture(texPath, modelDir, scanRoot);
+            } else {
+                cachedTex[0] = null;
+            }
+
+            // Info
+            float[] uvs = texData[gi].uvs();
+            int[] indices = perGeoIndices[gi];
+            int triCount = indices != null ? indices.length / 3 : 0;
+            int vertCount = uvs != null ? uvs.length / 2 : 0;
+            infoLabel.setText(String.format("Vertices: %d  Triangles: %d", vertCount, triCount));
+
+            applyHighlight.run();
+            uvPanel.repaint();
+        };
+
+        // Layer change handler — reload texture for selected layer
+        layerCombo.addActionListener(e -> {
+            int gi = geoCombo.getSelectedIndex();
+            int li = layerCombo.getSelectedIndex();
+            if (gi < 0 || gi >= geoCount || li < 0) return;
+            var layers = texData[gi].layers();
+            if (li >= layers.size()) return;
+            var layer = layers.get(li);
+            String texPath = layer.texturePath();
+            if (!texPath.isEmpty()) {
+                cachedTex[0] = GameDataSource.getInstance().loadTexture(texPath, modelDir, scanRoot);
+            } else {
+                cachedTex[0] = null;
+            }
+            uvPanel.repaint();
+        });
+
+        geoCombo.addActionListener(e -> updateUV.run());
+        alphaToggle.addActionListener(e -> uvPanel.repaint());
+        vertexDotsToggle.addActionListener(e -> uvPanel.repaint());
+        highlightToggle.addActionListener(e -> applyHighlight.run());
+        highlightMode.addActionListener(e -> applyHighlight.run());
+        if (geoCount > 0) {
+            geoCombo.setSelectedIndex(0);
+        }
+
+        // Track tab visibility
+        panel.addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0) {
+                uvMapTabActive = panel.isShowing();
+                applyHighlight.run();
+            }
+        });
+
+        return panel;
+    }
+
+    /** Draw an edge only once — deduplicates shared triangle edges. */
+    private static void drawEdgeOnce(Graphics2D g2, java.util.Set<Long> drawn, int a, int b,
+                                     int x0, int y0, int x1, int y1) {
+        long key = Math.min(a, b) * 100_000L + Math.max(a, b);
+        if (drawn.add(key)) g2.drawLine(x0, y0, x1, y1);
     }
 
     // ── Nodes tab ─────────────────────────────────────────────────────────
