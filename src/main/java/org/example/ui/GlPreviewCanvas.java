@@ -56,6 +56,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile boolean showBones;
     private volatile boolean showHelpers;
     private volatile boolean showAttachments;
+    private volatile boolean showRibbonEmitters;
+    private volatile boolean showParticleEmitters;
     private volatile boolean showNodeNames;
     private volatile boolean showGrid = true;
     private volatile boolean showCollision;
@@ -150,7 +152,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private int nodeNamesQuadVao, nodeNamesQuadVbo, nodeNamesTex;
     private int nodeNamesTexW, nodeNamesTexH;
     // Cached node positions after updateBoneVbo, for cube drawing
-    private float[][] bonePositions, helperPositions, attachPositions;
+    private float[][] bonePositions, helperPositions, attachPositions, ribbonPositions, particlePositions;
 
     // ── Shaders ──────────────────────────────────────────────────────────────
 
@@ -652,21 +654,20 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 glUseProgram(0);
             }
             // Node overlays (Bones / Helpers / Attachments)
-            boolean anyNodeOverlay = showBones || showHelpers || showAttachments;
+            boolean anyNodeOverlay = showBones || showHelpers || showAttachments || showRibbonEmitters || showParticleEmitters;
             // Also compute world map when node names are shown (even without visual overlays)
             if (!anyNodeOverlay && showNodeNames && animData.bones().length > 0) {
                 updateBoneVbo();
             }
             if (anyNodeOverlay && boneVao != 0 && solidShader != 0 && animData.bones().length > 0) {
                 int[] segments = updateBoneVbo();
-                // segments: [boneLines, helperLines, attachLines]
 
                 glUseProgram(solidShader);
                 glUniformMatrix4fv(solidMvp, false, modelMvp);
                 glDisable(GL_DEPTH_TEST);
 
                 // Draw parent-child lines
-                int totalLines = segments[0] + segments[1] + segments[2];
+                int totalLines = segments[0] + segments[1] + segments[2] + segments[3] + segments[4];
                 if (totalLines > 0) {
                     glBindVertexArray(boneVao);
                     int lineOff = 0;
@@ -683,6 +684,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                     if (showAttachments && segments[2] > 0) {
                         glUniform3f(solidColor, 0.2f, 0.85f, 0.9f); // cyan
                         glDrawArrays(GL_LINES, lineOff, segments[2]);
+                    }
+                    lineOff += segments[2];
+                    if (showRibbonEmitters && segments[3] > 0) {
+                        glUniform3f(solidColor, 0.9f, 0.3f, 0.7f); // magenta
+                        glDrawArrays(GL_LINES, lineOff, segments[3]);
+                    }
+                    lineOff += segments[3];
+                    if (showParticleEmitters && segments[4] > 0) {
+                        glUniform3f(solidColor, 0.3f, 0.9f, 0.4f); // green
+                        glDrawArrays(GL_LINES, lineOff, segments[4]);
                     }
                     glBindVertexArray(0);
                 }
@@ -703,6 +714,14 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                     if (showAttachments && attachPositions != null) {
                         glUniform3f(solidColor, 0.4f, 1.0f, 1.0f);
                         drawNodeCubes(attachPositions, modelMvp, ns);
+                    }
+                    if (showRibbonEmitters && ribbonPositions != null) {
+                        glUniform3f(solidColor, 0.9f, 0.3f, 0.7f);
+                        drawNodeCubes(ribbonPositions, modelMvp, ns);
+                    }
+                    if (showParticleEmitters && particlePositions != null) {
+                        glUniform3f(solidColor, 0.3f, 0.9f, 0.4f);
+                        drawNodeCubes(particlePositions, modelMvp, ns);
                     }
                     glBindVertexArray(0);
                     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -734,13 +753,13 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 drawParticles2(modelMvp);
             }
             // Draw node overlays
-            boolean anyNodeOverlay = showBones || showHelpers || showAttachments;
+            boolean anyNodeOverlay = showBones || showHelpers || showAttachments || showRibbonEmitters || showParticleEmitters;
             if (anyNodeOverlay && boneVao != 0 && solidShader != 0 && animData.bones().length > 0) {
                 int[] segments = updateBoneVbo();
                 glUseProgram(solidShader);
                 glUniformMatrix4fv(solidMvp, false, modelMvp);
                 glDisable(GL_DEPTH_TEST);
-                int totalLines = segments[0] + segments[1] + segments[2];
+                int totalLines = segments[0] + segments[1] + segments[2] + segments[3] + segments[4];
                 if (totalLines > 0) {
                     glBindVertexArray(boneVao);
                     int lineOff = 0;
@@ -757,6 +776,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                     if (showAttachments && segments[2] > 0) {
                         glUniform3f(solidColor, 0.2f, 0.85f, 0.9f);
                         glDrawArrays(GL_LINES, lineOff, segments[2]);
+                    }
+                    lineOff += segments[2];
+                    if (showRibbonEmitters && segments[3] > 0) {
+                        glUniform3f(solidColor, 0.9f, 0.3f, 0.7f);
+                        glDrawArrays(GL_LINES, lineOff, segments[3]);
+                    }
+                    lineOff += segments[3];
+                    if (showParticleEmitters && segments[4] > 0) {
+                        glUniform3f(solidColor, 0.3f, 0.9f, 0.4f);
+                        glDrawArrays(GL_LINES, lineOff, segments[4]);
                     }
                     glBindVertexArray(0);
                 }
@@ -1753,6 +1782,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     public void setShowBones(boolean b)       { showBones = b; }
     public void setShowHelpers(boolean h)    { showHelpers = h; }
     public void setShowAttachments(boolean a){ showAttachments = a; }
+    public void setShowRibbonEmitters(boolean r) { showRibbonEmitters = r; }
+    public void setShowParticleEmitters(boolean p) { showParticleEmitters = p; }
     public void setShowNodeNames(boolean n)  { showNodeNames = n; }
     public void setShowGrid(boolean g)       { showGrid = g; }
     public void setShowCollision(boolean c)  { showCollision = c; }
@@ -1862,15 +1893,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         // Build list of (name, screenX, screenY)
         java.util.List<int[]> screenPositions = new java.util.ArrayList<>();
         java.util.List<String> names = new java.util.ArrayList<>();
-        boolean anyTypeFilter = showBones || showHelpers || showAttachments;
+        boolean anyTypeFilter = showBones || showHelpers || showAttachments || showRibbonEmitters || showParticleEmitters;
         for (BoneNode bone : bones) {
             if (bone.name().isEmpty()) continue;
             if (anyTypeFilter) {
                 boolean visible = switch (bone.nodeType()) {
-                    case BONE               -> showBones;
-                    case HELPER             -> showHelpers;
-                    case ATTACHMENT         -> showAttachments;
-                    case RIBBON_EMITTER, PARTICLE_EMITTER2 -> showAttachments;
+                    case BONE              -> showBones;
+                    case HELPER            -> showHelpers;
+                    case ATTACHMENT        -> showAttachments;
+                    case RIBBON_EMITTER    -> showRibbonEmitters;
+                    case PARTICLE_EMITTER2 -> showParticleEmitters;
                 };
                 if (!visible) continue;
             }
@@ -2448,24 +2480,31 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         int li = 0;
 
         // Collect positions per type for cube drawing
-        java.util.List<float[]> bonePosList   = new java.util.ArrayList<>();
-        java.util.List<float[]> helperPosList  = new java.util.ArrayList<>();
-        java.util.List<float[]> attachPosList  = new java.util.ArrayList<>();
+        java.util.List<float[]> bonePosList     = new java.util.ArrayList<>();
+        java.util.List<float[]> helperPosList    = new java.util.ArrayList<>();
+        java.util.List<float[]> attachPosList    = new java.util.ArrayList<>();
+        java.util.List<float[]> ribbonPosList    = new java.util.ArrayList<>();
+        java.util.List<float[]> particlePosList  = new java.util.ArrayList<>();
 
         for (BoneNode bone : bones) {
             float[] pos = boneWorldPos(bone, worldMap);
             switch (bone.nodeType()) {
-                case BONE           -> bonePosList.add(pos);
-                case HELPER         -> helperPosList.add(pos);
-                case ATTACHMENT, RIBBON_EMITTER, PARTICLE_EMITTER2 -> attachPosList.add(pos);
+                case BONE              -> bonePosList.add(pos);
+                case HELPER            -> helperPosList.add(pos);
+                case ATTACHMENT        -> attachPosList.add(pos);
+                case RIBBON_EMITTER    -> ribbonPosList.add(pos);
+                case PARTICLE_EMITTER2 -> particlePosList.add(pos);
             }
         }
-        bonePositions   = bonePosList.toArray(new float[0][]);
-        helperPositions = helperPosList.toArray(new float[0][]);
-        attachPositions = attachPosList.toArray(new float[0][]);
+        bonePositions     = bonePosList.toArray(new float[0][]);
+        helperPositions   = helperPosList.toArray(new float[0][]);
+        attachPositions   = attachPosList.toArray(new float[0][]);
+        ribbonPositions   = ribbonPosList.toArray(new float[0][]);
+        particlePositions = particlePosList.toArray(new float[0][]);
 
-        // Lines: bones first, then helpers, then attachments
+        // Lines: bones, helpers, attachments, ribbons, particles
         int boneLineVerts = 0, helperLineVerts = 0, attachLineVerts = 0;
+        int ribbonLineVerts = 0, particleLineVerts = 0;
         for (BoneNode.NodeType type : BoneNode.NodeType.values()) {
             for (BoneNode bone : bones) {
                 if (bone.nodeType() != type) continue;
@@ -2477,9 +2516,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 buf[li++] = parentPos[0]; buf[li++] = parentPos[1]; buf[li++] = parentPos[2];
                 buf[li++] = childPos[0];  buf[li++] = childPos[1];  buf[li++] = childPos[2];
                 switch (type) {
-                    case BONE           -> boneLineVerts += 2;
-                    case HELPER         -> helperLineVerts += 2;
-                    case ATTACHMENT, RIBBON_EMITTER -> attachLineVerts += 2;
+                    case BONE              -> boneLineVerts += 2;
+                    case HELPER            -> helperLineVerts += 2;
+                    case ATTACHMENT        -> attachLineVerts += 2;
+                    case RIBBON_EMITTER    -> ribbonLineVerts += 2;
+                    case PARTICLE_EMITTER2 -> particleLineVerts += 2;
                 }
             }
         }
@@ -2487,7 +2528,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glBindBuffer(GL_ARRAY_BUFFER, boneVbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0L, java.util.Arrays.copyOf(buf, li));
         glBindBuffer(GL_ARRAY_BUFFER, 0);
-        return new int[]{boneLineVerts, helperLineVerts, attachLineVerts};
+        return new int[]{boneLineVerts, helperLineVerts, attachLineVerts, ribbonLineVerts, particleLineVerts};
     }
 
     private void buildExtentVao() {

@@ -441,6 +441,24 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(attachmentsCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
+        JCheckBox ribbonsCheckbox = new JCheckBox("Ribbon Emitters");
+        ribbonsCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        ribbonsCheckbox.setEnabled(parsedModel.ribbonEmitters().length > 0);
+        ribbonsCheckbox.addActionListener(e -> {
+            if (previewCanvas != null) previewCanvas.setShowRibbonEmitters(ribbonsCheckbox.isSelected());
+        });
+        panel.add(ribbonsCheckbox);
+        panel.add(Box.createVerticalStrut(4));
+
+        JCheckBox particlesCheckbox = new JCheckBox("Particle Emitters");
+        particlesCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        particlesCheckbox.setEnabled(parsedModel.particleEmitters2().length > 0);
+        particlesCheckbox.addActionListener(e -> {
+            if (previewCanvas != null) previewCanvas.setShowParticleEmitters(particlesCheckbox.isSelected());
+        });
+        panel.add(particlesCheckbox);
+        panel.add(Box.createVerticalStrut(4));
+
         JCheckBox nodeNamesCheckbox = new JCheckBox("Node Names");
         nodeNamesCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         nodeNamesCheckbox.addActionListener(e -> {
