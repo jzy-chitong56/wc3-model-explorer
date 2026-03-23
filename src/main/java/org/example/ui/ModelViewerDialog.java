@@ -183,13 +183,15 @@ public final class ModelViewerDialog extends JDialog {
     }
 
     private JComboBox<String> buildShadingCombo() {
-        JComboBox<String> combo = new JComboBox<>(new String[]{"Solid", "Textured", "Lit", "Normals", "Geosets", "Wireframe"});
+        JComboBox<String> combo = new JComboBox<>(new String[]{
+            "Solid", "Textured", "Lit", "Normals", "Geosets", "Bone Count", "Wireframe"
+        });
         combo.setSelectedIndex(1);
         combo.setOpaque(false);
         combo.addActionListener(e -> {
             if (previewCanvas == null) return;
             int idx = combo.getSelectedIndex();
-            if (idx == 5) { // Wireframe
+            if (idx == 6) { // Wireframe
                 previewCanvas.setShadingMode(GlPreviewCanvas.ShadingMode.SOLID);
                 previewCanvas.setWireframe(true);
             } else {
@@ -199,6 +201,7 @@ public final class ModelViewerDialog extends JDialog {
                     case 2  -> GlPreviewCanvas.ShadingMode.LIT;
                     case 3  -> GlPreviewCanvas.ShadingMode.NORMALS;
                     case 4  -> GlPreviewCanvas.ShadingMode.GEOSET_COLORS;
+                    case 5  -> GlPreviewCanvas.ShadingMode.BONE_COUNT;
                     default -> GlPreviewCanvas.ShadingMode.TEXTURED;
                 };
                 previewCanvas.setShadingMode(mode);

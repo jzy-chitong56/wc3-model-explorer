@@ -27,7 +27,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private static final float MIN_DISTANCE = 30.0f;
     private static final float MAX_DISTANCE = 3000.0f;
 
-    public enum ShadingMode { SOLID, TEXTURED, LIT, NORMALS, GEOSET_COLORS }
+    public enum ShadingMode { SOLID, TEXTURED, LIT, NORMALS, GEOSET_COLORS, BONE_COUNT }
 
     private final ModelMesh            mesh;
     private final ModelAnimData        animData;
@@ -83,6 +83,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private int texShader   = 0, texMvp   = -1, texMvLoc = -1, texSampler = -1, texHasTex = -1, texAlphaThresh = -1, texAlphaU = -1, texUVTransform = -1, texGeosetColor = -1, texUnshaded = -1;
     private int litShader   = 0, litMvp   = -1, litMvLoc = -1, litSampler = -1, litHasTex = -1, litAlphaThresh = -1, litAlphaU = -1, litUVTransform = -1, litGeosetColor = -1, litUnshaded = -1, litLightDir = -1;
     private int normalsShader = 0, normalsMvp = -1, normalsMvLoc = -1;
+    private int vtxColorShader = 0, vtxColorMvp = -1, vtxColorMvLoc = -1;
     private int ribbonShader = 0, ribbonMvp = -1, ribbonSampler = -1, ribbonHasTex = -1, ribbonAlphaU = -1;
     private int particle2Shader = 0, particle2Mvp = -1, particle2Sampler = -1, particle2HasTex = -1;
 
@@ -97,6 +98,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private int[][] geoLayerUvVbo; // [geosetIdx][layerIdx] — UV VBO per layer (0 = use geoUvVbo)
     private int[]   geosetMaterialId; // [geosetIdx] → material index
     private int[][] geoIndices; // cached index data per geoset (for highlight picking)
+    private int[] geoBoneCountVbo;  // per-vertex color VBO for BONE_COUNT mode
     private int highlightEbo = 0; // reusable EBO for bone highlight overlay
 
     private int cubeVao = 0, cubeVbo = 0, cubeEbo = 0;
@@ -278,6 +280,36 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         "  fragColor = vec4(N * 0.5 + 0.5, 1.0);\n" +
         "}\n";
 
+    // Vertex color shader: per-vertex RGB for bone weight visualization
+    static final String VTX_COLOR_VERT =
+        "#version 330 core\n" +
+        "layout(location=0) in vec3 aPos;\n" +
+        "layout(location=2) in vec3 aNormal;\n" +
+        "layout(location=3) in vec3 aColor;\n" +
+        "uniform mat4 mvp;\n" +
+        "uniform mat4 uModelView;\n" +
+        "out vec3 vColor;\n" +
+        "out vec3 vViewNormal;\n" +
+        "out vec3 vWorldPos;\n" +
+        "void main(){\n" +
+        "  gl_Position = mvp * vec4(aPos,1.0);\n" +
+        "  vColor = aColor;\n" +
+        "  vViewNormal = mat3(uModelView) * aNormal;\n" +
+        "  vWorldPos = aPos;\n" +
+        "}\n";
+
+    static final String VTX_COLOR_FRAG =
+        "#version 330 core\n" +
+        "in vec3 vColor;\n" +
+        "in vec3 vViewNormal;\n" +
+        "in vec3 vWorldPos;\n" +
+        "out vec4 fragColor;\n" +
+        "void main(){\n" +
+        "  vec3 N = length(vViewNormal) > 0.001 ? normalize(vViewNormal) : normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));\n" +
+        "  float shade = clamp(dot(N, vec3(0.0, 0.0, 1.0)) * 0.3 + 0.7, 0.4, 1.0);\n" +
+        "  fragColor = vec4(vColor * shade, 1.0);\n" +
+        "}\n";
+
     // Ribbon shader: position + UV + vertex color, textured with alpha blending
     // ── Particle Emitter 2 shader ──────────────────────────────────────────
     static final String PARTICLE2_VERT =
@@ -445,6 +477,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         compileTexShader();
         compileLitShader();
         compileNormalsShader();
+        compileVtxColorShader();
         buildGridVao();
         if (hasRenderableMesh()) {
             buildMeshVao();
@@ -572,6 +605,8 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             }
             if (shadingMode == ShadingMode.GEOSET_COLORS && solidShader != 0 && geoVao != null) {
                 drawGeosetColors(modelMvp);
+            } else if (shadingMode == ShadingMode.BONE_COUNT && vtxColorShader != 0 && geoVao != null && geoBoneCountVbo != null) {
+                drawVertexColors(modelMvp, modelView, geoBoneCountVbo);
             } else if (shadingMode == ShadingMode.NORMALS && normalsShader != 0 && geoVao != null) {
                 drawNormals(modelMvp, modelView);
             } else if (shadingMode == ShadingMode.LIT && litShader != 0 && geoVao != null) {
@@ -833,6 +868,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         {0.55f, 0.80f, 0.65f}, // mint
     };
 
+    private static float[] boneCountColor(int count) {
+        return switch (count) {
+            case 0 -> new float[]{0.3f, 0.3f, 0.3f};   // grey — no bones
+            case 1 -> new float[]{0.2f, 0.4f, 1.0f};    // blue
+            case 2 -> new float[]{0.2f, 0.9f, 0.3f};    // green
+            case 3 -> new float[]{1.0f, 0.9f, 0.1f};    // yellow
+            default -> new float[]{1.0f, 0.15f, 0.1f};  // red (4+)
+        };
+    }
+
     private void drawGeosetColors(float[] mvp) {
         glUseProgram(solidShader);
         glUniformMatrix4fv(solidMvp, false, mvp);
@@ -948,6 +993,30 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         glDepthMask(true);
         glDisable(GL_BLEND);
         glUniform1f(solidAlpha, 1.0f);
+        glBindVertexArray(0);
+        glUseProgram(0);
+    }
+
+    private void drawVertexColors(float[] mvp, float[] mv, int[] colorVbo) {
+        if (vtxColorShader == 0) return;
+        glUseProgram(vtxColorShader);
+        glUniformMatrix4fv(vtxColorMvp, false, mvp);
+        if (vtxColorMvLoc >= 0) glUniformMatrix4fv(vtxColorMvLoc, false, mv);
+        glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
+
+        for (int gi = 0; gi < geoVao.length; gi++) {
+            if (geoVao[gi] == 0 || geoIndexCount[gi] == 0) continue;
+            glBindVertexArray(geoVao[gi]);
+            if (colorVbo[gi] != 0) {
+                glBindBuffer(GL_ARRAY_BUFFER, colorVbo[gi]);
+                glVertexAttribPointer(3, 3, GL_FLOAT, false, 12, 0L);
+                glEnableVertexAttribArray(3);
+            } else {
+                glVertexAttrib3f(3, 0.5f, 0.5f, 0.5f); // grey fallback
+                glDisableVertexAttribArray(3);
+            }
+            glDrawElements(GL_TRIANGLES, geoIndexCount[gi], GL_UNSIGNED_INT, 0L);
+        }
         glBindVertexArray(0);
         glUseProgram(0);
     }
@@ -1933,6 +2002,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         normalsShader = linkProgram(NORMALS_VERT, NORMALS_FRAG);
         if (normalsShader != 0) { normalsMvp = glGetUniformLocation(normalsShader, "mvp"); normalsMvLoc = glGetUniformLocation(normalsShader, "uModelView"); }
     }
+    private void compileVtxColorShader() {
+        vtxColorShader = linkProgram(VTX_COLOR_VERT, VTX_COLOR_FRAG);
+        if (vtxColorShader != 0) { vtxColorMvp = glGetUniformLocation(vtxColorShader, "mvp"); vtxColorMvLoc = glGetUniformLocation(vtxColorShader, "uModelView"); }
+    }
     static int linkProgram(String vs, String fs) {
         int v = compileShader(GL_VERTEX_SHADER,vs), f = compileShader(GL_FRAGMENT_SHADER,fs);
         if (v==0||f==0) return 0;
@@ -1999,6 +2072,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         geoVertCount = new int[geoCount];
         geoIndices   = new int[geoCount][];
         geosetMaterialId = new int[geoCount];
+        geoBoneCountVbo = new int[geoCount];
 
         int[] allIndices = mesh.indices();
         int vertOffset   = 0;
@@ -2060,6 +2134,25 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
                 glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, geoEbo[gi]);
                 glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices, GL_STATIC_DRAW);
+
+                // Per-vertex bone color VBOs (location=3)
+                if (skin.hasSkinning()) {
+                    int[] vg = skin.vertexGroup();
+                    int[][] groups = skin.groupBoneObjectIds();
+
+                    // BONE_COUNT: heat map by number of influencing bones
+                    float[] countColors = new float[vc * 3];
+                    for (int vi = 0; vi < vc; vi++) {
+                        int grp = (vg != null && vi < vg.length) ? vg[vi] : 0;
+                        int cnt = (grp < groups.length) ? groups[grp].length : 0;
+                        float[] c = boneCountColor(cnt);
+                        countColors[vi * 3] = c[0]; countColors[vi * 3 + 1] = c[1]; countColors[vi * 3 + 2] = c[2];
+                    }
+                    geoBoneCountVbo[gi] = glGenBuffers();
+                    glBindBuffer(GL_ARRAY_BUFFER, geoBoneCountVbo[gi]);
+                    glBufferData(GL_ARRAY_BUFFER, countColors, GL_STATIC_DRAW);
+                }
+
                 glBindVertexArray(0);
 
                 // Load textures for all material layers
