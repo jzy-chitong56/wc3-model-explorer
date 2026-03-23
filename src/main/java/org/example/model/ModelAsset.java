@@ -2,11 +2,19 @@ package org.example.model;
 
 import java.nio.file.Path;
 
-public record ModelAsset(Path path, long fileSizeBytes, ModelMetadata metadata) {
+public record ModelAsset(Path path, long fileSizeBytes, ModelMetadata metadata, String parseError) {
+    public ModelAsset(Path path, long fileSizeBytes, ModelMetadata metadata) {
+        this(path, fileSizeBytes, metadata, null);
+    }
+
     public ModelAsset {
         if (metadata == null) {
             metadata = ModelMetadata.EMPTY;
         }
+    }
+
+    public boolean hasParseError() {
+        return parseError != null && !parseError.isEmpty();
     }
 
     public String fileName() {

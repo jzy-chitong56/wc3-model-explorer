@@ -938,10 +938,16 @@ public final class MainWindow extends JFrame {
                     displayName = displayName + " (" + mName + ")";
                 }
                 titleLabel.setText(displayName);
-                String polygonInfo = asset.metadata().hasKnownPolygonCount()
-                        ? formatPolygonText(asset.metadata().polygonCount(), format)
-                        : "poly N/A";
-                metaLabel.setText(formatFileSize(asset.fileSizeBytes()) + " | " + polygonInfo);
+                if (asset.hasParseError()) {
+                    metaLabel.setForeground(new Color(200, 100, 80));
+                    metaLabel.setText("Parse error: " + asset.parseError());
+                } else {
+                    metaLabel.setForeground(new Color(104, 112, 124));
+                    String polygonInfo = asset.metadata().hasKnownPolygonCount()
+                            ? formatPolygonText(asset.metadata().polygonCount(), format)
+                            : "poly N/A";
+                    metaLabel.setText(formatFileSize(asset.fileSizeBytes()) + " | " + polygonInfo);
+                }
 
                 // Show thumbnail if available, otherwise shimmer
                 BufferedImage thumb = thumbnailRenderer != null
@@ -959,13 +965,21 @@ public final class MainWindow extends JFrame {
                 String tooltipName = asset.fileName();
                 String mn = meta.modelName();
                 if (!mn.isEmpty()) tooltipName += " (" + mn + ")";
-                String tooltip = "<html><b>" + tooltipName + "</b><br>"
-                        + "Polygons: " + (meta.hasKnownPolygonCount() ? fmt.format(meta.polygonCount()) : "N/A") + "<br>"
-                        + "Vertices: " + fmt.format(meta.vertexCount()) + "<br>"
-                        + "Bones: " + fmt.format(meta.boneCount()) + "<br>"
-                        + "Sequences: " + fmt.format(meta.sequenceCount()) + "<br>"
-                        + "Size: " + formatFileSize(asset.fileSizeBytes()) + "<br>"
-                        + "<font color='gray'>" + asset.path() + "</font></html>";
+                String tooltip;
+                if (asset.hasParseError()) {
+                    tooltip = "<html><b>" + tooltipName + "</b><br>"
+                            + "<font color='#cc6644'>Parse error: " + escapeHtml(asset.parseError()) + "</font><br>"
+                            + "Size: " + formatFileSize(asset.fileSizeBytes()) + "<br>"
+                            + "<font color='gray'>" + asset.path() + "</font></html>";
+                } else {
+                    tooltip = "<html><b>" + tooltipName + "</b><br>"
+                            + "Polygons: " + (meta.hasKnownPolygonCount() ? fmt.format(meta.polygonCount()) : "N/A") + "<br>"
+                            + "Vertices: " + fmt.format(meta.vertexCount()) + "<br>"
+                            + "Bones: " + fmt.format(meta.boneCount()) + "<br>"
+                            + "Sequences: " + fmt.format(meta.sequenceCount()) + "<br>"
+                            + "Size: " + formatFileSize(asset.fileSizeBytes()) + "<br>"
+                            + "<font color='gray'>" + asset.path() + "</font></html>";
+                }
                 panel.setToolTipText(tooltip);
             }
             panel.setCardStyle(isSelected);
@@ -984,6 +998,10 @@ public final class MainWindow extends JFrame {
             } else {
                 return bytes + " B";
             }
+        }
+
+        private static String escapeHtml(String s) {
+            return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
         }
     }
 

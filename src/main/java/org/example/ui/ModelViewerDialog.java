@@ -39,6 +39,7 @@ public final class ModelViewerDialog extends JDialog {
     private final ReterasParsedModel parsedModel;
     private final ModelAsset asset;
     private final Path scanRoot;
+    private Throwable canvasError; // non-null if GL canvas creation failed
     private Timer scrubberSyncTimer;
 
     public ModelViewerDialog(JFrame owner, ModelAsset asset, Path scanRoot) {
@@ -67,6 +68,7 @@ public final class ModelViewerDialog extends JDialog {
             System.err.println("[ModelViewer] GlPreviewCanvas failed: " + t);
             t.printStackTrace();
             createdCanvas = null;
+            canvasError = t;
         }
         if (createdCanvas != null) {
             AppSettings s = AppSettings.loadDefault();
@@ -144,12 +146,22 @@ public final class ModelViewerDialog extends JDialog {
             layered.setPreferredSize(new Dimension(VIEW_W, 600));
             panel.add(layered, BorderLayout.CENTER);
         } else {
-            JLabel fallback = new JLabel(
-                    "<html><center>OpenGL preview unavailable for <b>" + asset.fileName() + "</b><br>"
-                            + "Check the console for details.</center></html>",
-                    JLabel.CENTER);
+            String msg = canvasError != null
+                    ? "<html><center>OpenGL preview failed for <b>" + asset.fileName() + "</b><br>"
+                      + "<font color='#cc8844'>" + escapeHtml(canvasError.toString()) + "</font><br><br>"
+                      + "<i>Double-click to view full stack trace.</i></center></html>"
+                    : "<html><center>OpenGL preview unavailable for <b>" + asset.fileName() + "</b></center></html>";
+            JLabel fallback = new JLabel(msg, JLabel.CENTER);
             fallback.setForeground(new Color(200, 80, 80));
             fallback.setBorder(new EmptyBorder(12, 12, 12, 12));
+            if (canvasError != null) {
+                fallback.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+                fallback.addMouseListener(new java.awt.event.MouseAdapter() {
+                    @Override public void mouseClicked(java.awt.event.MouseEvent e) {
+                        if (e.getClickCount() == 2) showErrorStackTrace(canvasError);
+                    }
+                });
+            }
             panel.add(fallback, BorderLayout.CENTER);
         }
         return panel;
@@ -1448,6 +1460,21 @@ public final class ModelViewerDialog extends JDialog {
         });
 
         return panel;
+    }
+
+    private static String escapeHtml(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    private void showErrorStackTrace(Throwable t) {
+        java.io.StringWriter sw = new java.io.StringWriter();
+        t.printStackTrace(new java.io.PrintWriter(sw));
+        JTextArea area = new JTextArea(sw.toString());
+        area.setEditable(false);
+        area.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, 12));
+        JScrollPane scroll = new JScrollPane(area);
+        scroll.setPreferredSize(new Dimension(700, 400));
+        JOptionPane.showMessageDialog(this, scroll, "Render Error – " + asset.fileName(), JOptionPane.ERROR_MESSAGE);
     }
 
     /** Draw an edge only once — deduplicates shared triangle edges. */

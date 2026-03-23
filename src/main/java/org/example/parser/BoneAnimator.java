@@ -35,21 +35,35 @@ public final class BoneAnimator {
      */
     public static Map<Integer, float[]> computeWorldMatrices(
             BoneNode[] bones, long timeMs, long seqStart, long seqEnd) {
-        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, null, null);
+        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, null, System.currentTimeMillis(), null);
     }
 
     public static Map<Integer, float[]> computeWorldMatrices(
             BoneNode[] bones, long timeMs, long seqStart, long seqEnd, long[] globalSequences) {
-        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, globalSequences, null);
+        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, globalSequences, System.currentTimeMillis(), null);
+    }
+
+    public static Map<Integer, float[]> computeWorldMatrices(
+            BoneNode[] bones, long timeMs, long seqStart, long seqEnd,
+            long[] globalSequences, long globalTimeMs) {
+        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, globalSequences, globalTimeMs, null);
+    }
+
+    /** Convenience: uses System.currentTimeMillis() for global sequences. */
+    public static Map<Integer, float[]> computeWorldMatrices(
+            BoneNode[] bones, long timeMs, long seqStart, long seqEnd,
+            long[] globalSequences, float[] cameraRotation) {
+        return computeWorldMatrices(bones, timeMs, seqStart, seqEnd, globalSequences, System.currentTimeMillis(), cameraRotation);
     }
 
     /**
+     * @param globalTimeMs   pausable wall-clock time for global sequences
      * @param cameraRotation camera orientation quaternion [x,y,z,w] in model space (Z-up),
      *                       or null to disable camera-facing billboards
      */
     public static Map<Integer, float[]> computeWorldMatrices(
             BoneNode[] bones, long timeMs, long seqStart, long seqEnd,
-            long[] globalSequences, float[] cameraRotation) {
+            long[] globalSequences, long globalTimeMs, float[] cameraRotation) {
 
         Map<Integer, float[]> worldMatrices = new HashMap<>(bones.length * 2);
         Map<Integer, float[]> worldRotations = new HashMap<>(bones.length * 2);
@@ -59,7 +73,7 @@ public final class BoneAnimator {
 
         for (BoneNode bone : bones) {
             computeWorldMatrix(bone, byId, worldMatrices, worldRotations, worldScales,
-                    timeMs, seqStart, seqEnd, globalSequences, cameraRotation);
+                    timeMs, seqStart, seqEnd, globalSequences, globalTimeMs, cameraRotation);
         }
         return worldMatrices;
     }
@@ -72,7 +86,7 @@ public final class BoneAnimator {
             Map<Integer, float[]> matCache,
             Map<Integer, float[]> rotCache,
             Map<Integer, float[]> scaleCache,
-            long t, long s0, long s1, long[] globalSequences,
+            long t, long s0, long s1, long[] globalSequences, long globalTimeMs,
             float[] cameraRotation) {
 
         if (matCache.containsKey(bone.objectId())) {
@@ -87,7 +101,7 @@ public final class BoneAnimator {
             BoneNode parent = byId.get(bone.parentId());
             if (parent != null) {
                 computeWorldMatrix(parent, byId, matCache, rotCache, scaleCache,
-                        t, s0, s1, globalSequences, cameraRotation);
+                        t, s0, s1, globalSequences, globalTimeMs, cameraRotation);
                 parentWorldMatrix = matCache.getOrDefault(parent.objectId(), IDENTITY);
                 parentWorldRot = rotCache.getOrDefault(parent.objectId(), IDENTITY_QUAT);
                 parentWorldScale = scaleCache.getOrDefault(parent.objectId(), ONE_VEC3);
@@ -100,9 +114,9 @@ public final class BoneAnimator {
         float py = p != null && p.length > 1 ? p[1] : 0f;
         float pz = p != null && p.length > 2 ? p[2] : 0f;
 
-        float[] tr = interpTrackVec3(bone.trans(), t, s0, s1, globalSequences, 0f, 0f, 0f);
-        float[] localRot = interpTrackQuat(bone.rot(), t, s0, s1, globalSequences);
-        float[] sc = interpTrackVec3(bone.scale(), t, s0, s1, globalSequences, 1f, 1f, 1f);
+        float[] tr = interpTrackVec3(bone.trans(), t, s0, s1, globalSequences, globalTimeMs, 0f, 0f, 0f);
+        float[] localRot = interpTrackQuat(bone.rot(), t, s0, s1, globalSequences, globalTimeMs);
+        float[] sc = interpTrackVec3(bone.scale(), t, s0, s1, globalSequences, globalTimeMs, 1f, 1f, 1f);
 
         // Inheritance cancellation (Retera convention):
         // Instead of decomposing the parent matrix, we always multiply
@@ -264,43 +278,71 @@ public final class BoneAnimator {
     /**
      * Interpolate a Vec3 track, automatically using cyclic interpolation if the
      * track has a globalSequenceId, otherwise standard sequence-range interpolation.
+     *
+     * @param globalTimeMs  wall-clock-like time for global sequences (pausable by caller)
      */
     public static float[] interpTrackVec3(AnimTrack tk, long t, long s0, long s1,
-                                          long[] globalSequences, float defX, float defY, float defZ) {
+                                          long[] globalSequences, long globalTimeMs,
+                                          float defX, float defY, float defZ) {
         if (tk == null || tk.isEmpty()) return new float[]{defX, defY, defZ};
         int gsId = tk.globalSequenceId();
         if (gsId >= 0 && globalSequences != null && gsId < globalSequences.length && globalSequences[gsId] > 0) {
-            return interpVec3Cyclic(tk, System.currentTimeMillis(), globalSequences[gsId], defX, defY, defZ);
+            return interpVec3Cyclic(tk, globalTimeMs, globalSequences[gsId], defX, defY, defZ);
         }
         return interpVec3(tk, t, s0, s1, defX, defY, defZ);
+    }
+
+    /** @deprecated Use the overload with globalTimeMs parameter */
+    @Deprecated
+    public static float[] interpTrackVec3(AnimTrack tk, long t, long s0, long s1,
+                                          long[] globalSequences, float defX, float defY, float defZ) {
+        return interpTrackVec3(tk, t, s0, s1, globalSequences, System.currentTimeMillis(), defX, defY, defZ);
     }
 
     /**
      * Interpolate a Quat track, automatically using cyclic interpolation if the
      * track has a globalSequenceId.
+     *
+     * @param globalTimeMs  wall-clock-like time for global sequences (pausable by caller)
      */
     public static float[] interpTrackQuat(AnimTrack tk, long t, long s0, long s1,
-                                          long[] globalSequences) {
+                                          long[] globalSequences, long globalTimeMs) {
         if (tk == null || tk.isEmpty()) return new float[]{0f, 0f, 0f, 1f};
         int gsId = tk.globalSequenceId();
         if (gsId >= 0 && globalSequences != null && gsId < globalSequences.length && globalSequences[gsId] > 0) {
-            return interpQuatCyclic(tk, System.currentTimeMillis(), globalSequences[gsId]);
+            return interpQuatCyclic(tk, globalTimeMs, globalSequences[gsId]);
         }
         return interpQuat(tk, t, s0, s1);
+    }
+
+    /** @deprecated Use the overload with globalTimeMs parameter */
+    @Deprecated
+    public static float[] interpTrackQuat(AnimTrack tk, long t, long s0, long s1,
+                                          long[] globalSequences) {
+        return interpTrackQuat(tk, t, s0, s1, globalSequences, System.currentTimeMillis());
     }
 
     /**
      * Interpolate a scalar track, automatically using cyclic interpolation if the
      * track has a globalSequenceId.
+     *
+     * @param globalTimeMs  wall-clock-like time for global sequences (pausable by caller)
      */
     public static float interpTrackScalar(AnimTrack tk, long t, long s0, long s1,
-                                          long[] globalSequences, float def) {
+                                          long[] globalSequences, long globalTimeMs, float def) {
         if (tk == null || tk.isEmpty()) return def;
         int gsId = tk.globalSequenceId();
         if (gsId >= 0 && globalSequences != null && gsId < globalSequences.length && globalSequences[gsId] > 0) {
-            return interpScalarCyclic(tk, System.currentTimeMillis(), globalSequences[gsId], def);
+            return interpScalarCyclic(tk, globalTimeMs, globalSequences[gsId], def);
         }
         return interpScalar(tk, t, s0, s1, def);
+    }
+
+    /** @deprecated Use the overload with globalTimeMs parameter */
+    @Deprecated
+    public static float interpTrackScalar(AnimTrack tk, long t, long s0, long s1,
+                                          long[] globalSequences, float def) {
+        return interpTrackScalar(tk, t, s0, s1, globalSequences, System.currentTimeMillis(), def);
     }
 
     // ── Track interpolation ──────────────────────────────────────────────────

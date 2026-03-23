@@ -66,8 +66,15 @@ public final class ModelScanner {
             try {
                 ModelMetadata meta = ModelMetadataExtractor.extract(path);
                 results.add(new ModelAsset(path, Files.size(path), meta));
-            } catch (Exception ignored) {
-                // Skip unreadable files.
+            } catch (Exception ex) {
+                // Keep the file in results with an error message
+                try {
+                    String msg = ex.getMessage();
+                    if (msg == null || msg.isEmpty()) msg = ex.getClass().getSimpleName();
+                    results.add(new ModelAsset(path, Files.size(path), ModelMetadata.EMPTY, msg));
+                } catch (Exception ignored) {
+                    // File truly unreadable (can't even stat size)
+                }
             }
             int done = counter.incrementAndGet();
             if (progressCallback != null) {

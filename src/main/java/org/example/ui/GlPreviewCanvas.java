@@ -117,6 +117,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile long    animTimeMs    = 0L;
     private volatile long    lastNanoNs    = 0L;
     private volatile boolean animLooping  = true;
+    private volatile long    globalSeqTimeMs = 0L; // pausable clock for global sequences
     private volatile int     teamColorIdx = 0;
     private volatile boolean tcDirty      = false;
     private float[]          animatedVertices;
@@ -581,7 +582,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                     // Compute world matrices for ribbon/particle emitters even without mesh animation
                     SequenceInfo seq = animData.sequences().get(currentSeqIdx);
                     lastWorldMap = BoneAnimator.computeWorldMatrices(
-                            animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences());
+                            animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), globalSeqTimeMs);
                 }
                 // Only re-sample geoset properties while animation is playing.
                 // When stopped (non-looping, reached end), keep last sampled values
@@ -721,7 +722,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 advanceAnimation();
                 SequenceInfo seq = animData.sequences().get(currentSeqIdx);
                 lastWorldMap = BoneAnimator.computeWorldMatrices(
-                        animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences());
+                        animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), globalSeqTimeMs);
                 simulateRibbons(lastDtSec);
                 simulateParticles2(lastDtSec);
             }
@@ -1344,6 +1345,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         lastDtSec = (float)(deltaNs / 1_000_000_000.0 * animSpeed);
         if (!animPlaying) return;
         long deltaMs = (long)(deltaNs / 1_000_000.0 * animSpeed);
+        globalSeqTimeMs += deltaMs;
         SequenceInfo seq = animData.sequences().get(currentSeqIdx);
         long duration = seq.end() - seq.start();
         if (duration <= 0) return;
@@ -1372,7 +1374,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             AnimTrack track = animData.geosetAlpha().get(gi);
             if (track != null && !track.isEmpty()) {
                 if (track.isGlobal() || hasKeysInRange(track, seq.start(), seq.end())) {
-                    float val = BoneAnimator.interpTrackScalar(track, animTimeMs, seq.start(), seq.end(), globalSeqs, 1f);
+                    float val = BoneAnimator.interpTrackScalar(track, animTimeMs, seq.start(), seq.end(), globalSeqs, globalSeqTimeMs, 1f);
                     geosetAlphaValues[gi] = Math.max(0f, Math.min(1f, val));
                 } else {
                     geosetAlphaValues[gi] = 1.0f;
@@ -1395,7 +1397,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 AnimTrack track = animData.layerAlpha().get(ModelAnimData.layerKey(gi, li));
                 if (track != null && !track.isEmpty()) {
                     if (track.isGlobal() || hasKeysInRange(track, seq.start(), seq.end())) {
-                        float val = BoneAnimator.interpTrackScalar(track, animTimeMs, seq.start(), seq.end(), globalSeqs, staticAlpha);
+                        float val = BoneAnimator.interpTrackScalar(track, animTimeMs, seq.start(), seq.end(), globalSeqs, globalSeqTimeMs, staticAlpha);
                         layerAlphaValues[gi][li] = Math.max(0f, Math.min(1f, val));
                     } else {
                         layerAlphaValues[gi][li] = staticAlpha;
@@ -1414,7 +1416,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             AnimTrack track = animData.geosetColor().get(gi);
             if (track != null && !track.isEmpty()) {
                 if (track.isGlobal() || hasKeysInRange(track, seq.start(), seq.end())) {
-                    float[] rgb = BoneAnimator.interpTrackVec3(track, animTimeMs, seq.start(), seq.end(), globalSeqs, 1f, 1f, 1f);
+                    float[] rgb = BoneAnimator.interpTrackVec3(track, animTimeMs, seq.start(), seq.end(), globalSeqs, globalSeqTimeMs, 1f, 1f, 1f);
                     geosetColorValues[gi] = rgb;
                 } else {
                     // Fall back to static color or white
@@ -1456,9 +1458,9 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 }
 
                 // interpTrack* auto-dispatches to cyclic for global sequence tracks
-                float[] trans = BoneAnimator.interpTrackVec3(ta.translation(), t, s0, s1, globalSeqs, 0, 0, 0);
-                float[] rot = BoneAnimator.interpTrackQuat(ta.rotation(), t, s0, s1, globalSeqs);
-                float[] scl = BoneAnimator.interpTrackVec3(ta.scale(), t, s0, s1, globalSeqs, 1, 1, 1);
+                float[] trans = BoneAnimator.interpTrackVec3(ta.translation(), t, s0, s1, globalSeqs, globalSeqTimeMs, 0, 0, 0);
+                float[] rot = BoneAnimator.interpTrackQuat(ta.rotation(), t, s0, s1, globalSeqs, globalSeqTimeMs);
+                float[] scl = BoneAnimator.interpTrackVec3(ta.scale(), t, s0, s1, globalSeqs, globalSeqTimeMs, 1, 1, 1);
                 layerUVTransforms[gi][li] = buildUVTransformMatrix(trans, rot, scl);
             }
         }
@@ -1547,7 +1549,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         // billboard bones just cancel parent rotation (Reteras convention).
         // Particle/ribbon billboarding is handled separately in computeBillboardVectors().
         Map<Integer, float[]> worldMap = BoneAnimator.computeWorldMatrices(
-                animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences());
+                animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), globalSeqTimeMs);
         lastWorldMap = worldMap; // cache for ribbon simulation and node names overlay
 
         float[] bindNormals = mesh.normals();
@@ -1615,7 +1617,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
      */
     private void uploadAnimatedVerticesNoSequence() {
         Map<Integer, float[]> worldMap = BoneAnimator.computeWorldMatrices(
-                animData.bones(), 0, 0, 0, animData.globalSequences());
+                animData.bones(), 0, 0, 0, animData.globalSequences(), globalSeqTimeMs);
         lastWorldMap = worldMap;
 
         float[] bindNormals = mesh.normals();
@@ -2432,10 +2434,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         if (currentSeqIdx >= 0 && animData.hasAnimation()) {
             SequenceInfo seq = animData.sequences().get(currentSeqIdx);
             float[] camRot = computeCameraRotationQuat();
-            worldMap = BoneAnimator.computeWorldMatrices(bones, animTimeMs, seq.start(), seq.end(), animData.globalSequences(), camRot);
+            worldMap = BoneAnimator.computeWorldMatrices(bones, animTimeMs, seq.start(), seq.end(), animData.globalSequences(), globalSeqTimeMs, camRot);
         } else {
             float[] camRot = computeCameraRotationQuat();
-            worldMap = BoneAnimator.computeWorldMatrices(bones, 0, 0, 0, animData.globalSequences(), camRot);
+            worldMap = BoneAnimator.computeWorldMatrices(bones, 0, 0, 0, animData.globalSequences(), globalSeqTimeMs, camRot);
         }
         lastWorldMap = worldMap;
 
@@ -3004,7 +3006,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         if (seq == null && !track.isGlobal()) return defaultVal;
         long start = seq != null ? seq.start() : 0;
         long end = seq != null ? seq.end() : 0;
-        return BoneAnimator.interpTrackScalar(track, animTimeMs, start, end, globalSeqs, defaultVal);
+        return BoneAnimator.interpTrackScalar(track, animTimeMs, start, end, globalSeqs, globalSeqTimeMs, defaultVal);
     }
 
     private int buildRibbonGeometry(float[] buf) {
@@ -3068,7 +3070,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         if (seq == null && !track.isGlobal()) return null;
         long start = seq != null ? seq.start() : 0;
         long end = seq != null ? seq.end() : 0;
-        return BoneAnimator.interpTrackVec3(track, animTimeMs, start, end, globalSeqs, dr, dg, db);
+        return BoneAnimator.interpTrackVec3(track, animTimeMs, start, end, globalSeqs, globalSeqTimeMs, dr, dg, db);
     }
 
     private void drawRibbons(float[] mvp) {

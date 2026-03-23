@@ -278,9 +278,13 @@ public final class GameDataSource {
     }
 
     private static boolean existsAt(Path dir, String normalised) {
-        if (Files.isRegularFile(dir.resolve(normalised))) return true;
-        int slash = normalised.lastIndexOf('/');
-        return slash >= 0 && Files.isRegularFile(dir.resolve(normalised.substring(slash + 1)));
+        try {
+            if (Files.isRegularFile(dir.resolve(normalised))) return true;
+            int slash = normalised.lastIndexOf('/');
+            return slash >= 0 && Files.isRegularFile(dir.resolve(normalised.substring(slash + 1)));
+        } catch (java.nio.file.InvalidPathException e) {
+            return false; // CASC virtual paths may contain ':' which is illegal on Windows
+        }
     }
 
     private static String teamColorPath(int teamColorIdx) {
@@ -342,19 +346,23 @@ public final class GameDataSource {
     }
 
     private BufferedImage tryDiskResolve(Path dir, String normalised) {
-        Path candidate = dir.resolve(normalised);
-        if (Files.isRegularFile(candidate)) {
-            System.out.println("[GameDataSource] Found on disk: " + candidate);
-            return readImage(candidate);
-        }
-        // Also try bare filename (without leading path components)
-        int slash = normalised.lastIndexOf('/');
-        if (slash >= 0) {
-            candidate = dir.resolve(normalised.substring(slash + 1));
+        try {
+            Path candidate = dir.resolve(normalised);
             if (Files.isRegularFile(candidate)) {
                 System.out.println("[GameDataSource] Found on disk: " + candidate);
                 return readImage(candidate);
             }
+            // Also try bare filename (without leading path components)
+            int slash = normalised.lastIndexOf('/');
+            if (slash >= 0) {
+                candidate = dir.resolve(normalised.substring(slash + 1));
+                if (Files.isRegularFile(candidate)) {
+                    System.out.println("[GameDataSource] Found on disk: " + candidate);
+                    return readImage(candidate);
+                }
+            }
+        } catch (java.nio.file.InvalidPathException e) {
+            // CASC virtual paths may contain ':' which is illegal on Windows
         }
         return null;
     }
