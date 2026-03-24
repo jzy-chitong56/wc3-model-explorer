@@ -1,17 +1,19 @@
 package org.example.model;
 
+import org.example.i18n.Messages;
+
 /** Thumbnail rendering quality presets. */
 public enum ThumbnailQuality {
-    LOW("Low (256x256)", 256, 256),
-    MEDIUM("Medium (512→256)", 512, 256),
-    HIGH("High (1024→256)", 1024, 256);
+    LOW("quality.low", 256, 256),
+    MEDIUM("quality.medium", 512, 256),
+    HIGH("quality.high", 1024, 256);
 
-    private final String label;
+    private final String key;
     private final int renderSize;
     private final int thumbSize;
 
-    ThumbnailQuality(String label, int renderSize, int thumbSize) {
-        this.label = label;
+    ThumbnailQuality(String key, int renderSize, int thumbSize) {
+        this.key = key;
         this.renderSize = renderSize;
         this.thumbSize = thumbSize;
     }
@@ -20,5 +22,5 @@ public enum ThumbnailQuality {
     public int thumbSize() { return thumbSize; }
 
     @Override
-    public String toString() { return label; }
+    public String toString() { return Messages.get(key); }
 }

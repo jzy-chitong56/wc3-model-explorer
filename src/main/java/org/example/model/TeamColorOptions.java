@@ -1,14 +1,16 @@
 package org.example.model;
 
+import org.example.i18n.Messages;
+
 public final class TeamColorOptions {
     public static final int COUNT = 25;
 
-    private static final String[] NAMES = {
-            "Red", "Blue", "Teal", "Purple", "Yellow", "Orange",
-            "Green", "Pink", "Gray", "Light Blue", "Dark Green", "Brown",
-            "Maroon", "Navy", "Turquoise", "Violet", "Wheat", "Peach",
-            "Mint", "Lavender", "Coal", "Snow", "Emerald", "Peanut",
-            "Black"
+    private static final String[] KEYS = {
+            "team.red", "team.blue", "team.teal", "team.purple", "team.yellow", "team.orange",
+            "team.green", "team.pink", "team.gray", "team.lightBlue", "team.darkGreen", "team.brown",
+            "team.maroon", "team.navy", "team.turquoise", "team.violet", "team.wheat", "team.peach",
+            "team.mint", "team.lavender", "team.coal", "team.snow", "team.emerald", "team.peanut",
+            "team.black"
     };
     private static final int[][] FALLBACK_RGB = {
             {255, 4, 2}, {0, 66, 255}, {27, 230, 186}, {84, 0, 129},
@@ -20,8 +22,6 @@ public final class TeamColorOptions {
             {46, 45, 46}
     };
 
-    private static final String[] LABELS = buildLabels();
-
     private TeamColorOptions() {}
 
     public static int clampIndex(int idx) {
@@ -29,18 +29,14 @@ public final class TeamColorOptions {
     }
 
     public static String[] labels() {
-        return LABELS.clone();
+        String[] labels = new String[COUNT];
+        for (int i = 0; i < COUNT; i++) {
+            labels[i] = Messages.get(KEYS[i]);
+        }
+        return labels;
     }
 
     public static int[] fallbackRgb(int idx) {
         return FALLBACK_RGB[clampIndex(idx)].clone();
-    }
-
-    private static String[] buildLabels() {
-        String[] labels = new String[COUNT];
-        for (int i = 0; i < COUNT; i++) {
-            labels[i] = NAMES[i];
-        }
-        return labels;
     }
 }

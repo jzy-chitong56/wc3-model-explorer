@@ -1,5 +1,7 @@
 package org.example.ui;
 
+import static org.example.i18n.Messages.get;
+import static org.example.i18n.Messages.fmt;
 import org.example.model.*;
 import org.example.parser.*;
 
@@ -43,7 +45,7 @@ public final class ModelViewerDialog extends JDialog {
     private Timer scrubberSyncTimer;
 
     public ModelViewerDialog(JFrame owner, ModelAsset asset, Path scanRoot) {
-        super(owner, "Model Viewer – " + asset.fileName()
+        super(owner, fmt("viewer.title", asset.fileName())
                 + (asset.metadata().modelName().isEmpty() ? ""
                    : " (" + asset.metadata().modelName() + ")"), false);
         this.asset = asset;
@@ -147,10 +149,10 @@ public final class ModelViewerDialog extends JDialog {
             panel.add(layered, BorderLayout.CENTER);
         } else {
             String msg = canvasError != null
-                    ? "<html><center>OpenGL preview failed for <b>" + asset.fileName() + "</b><br>"
-                      + "<font color='#cc8844'>" + escapeHtml(canvasError.toString()) + "</font><br><br>"
-                      + "<i>Double-click to view full stack trace.</i></center></html>"
-                    : "<html><center>OpenGL preview unavailable for <b>" + asset.fileName() + "</b></center></html>";
+                    ? "<html><center>" + fmt("viewer.glFailed", asset.fileName()) + "<br>"
+                      + fmt("viewer.glFailedDetail", escapeHtml(canvasError.toString()))
+                      + "</center></html>"
+                    : "<html><center>" + fmt("viewer.glUnavailable", asset.fileName()) + "</center></html>";
             JLabel fallback = new JLabel(msg, JLabel.CENTER);
             fallback.setForeground(new Color(200, 80, 80));
             fallback.setBorder(new EmptyBorder(12, 12, 12, 12));
@@ -168,7 +170,7 @@ public final class ModelViewerDialog extends JDialog {
     }
 
     private JLabel buildStatsHud() {
-        NumberFormat fmt = NumberFormat.getIntegerInstance();
+        NumberFormat nfmt = NumberFormat.getIntegerInstance();
         ModelMesh mesh = parsedModel.mesh();
         ModelAnimData animData = parsedModel.animData();
 
@@ -179,11 +181,11 @@ public final class ModelViewerDialog extends JDialog {
         int seqs = animData.sequences().size();
 
         String html = "<html><body style='font-family:monospace; font-size:10px; color:#ccddee;'>"
-                + "Geosets: " + geosets + "<br>"
-                + "Vertices: " + fmt.format(verts) + "<br>"
-                + "Triangles: " + fmt.format(tris) + "<br>"
-                + "Bones: " + bones + "<br>"
-                + "Sequences: " + seqs
+                + fmt("viewer.geosets", geosets) + "<br>"
+                + fmt("viewer.vertices", nfmt.format(verts)) + "<br>"
+                + fmt("viewer.triangles", nfmt.format(tris)) + "<br>"
+                + fmt("viewer.bones", bones) + "<br>"
+                + fmt("viewer.sequences", seqs)
                 + "</body></html>";
 
         JLabel label = new JLabel(html);
@@ -196,7 +198,8 @@ public final class ModelViewerDialog extends JDialog {
 
     private JComboBox<String> buildShadingCombo() {
         JComboBox<String> combo = new JComboBox<>(new String[]{
-            "Solid", "Textured", "Lit", "Normals", "Geosets", "Bone Count", "Wireframe"
+            get("viewer.solid"), get("viewer.textured"), get("viewer.lit"), get("viewer.normals"),
+            get("viewer.geosetsMode"), get("viewer.boneCount"), get("viewer.wireframe")
         });
         combo.setSelectedIndex(1);
         combo.setOpaque(false);
@@ -223,9 +226,9 @@ public final class ModelViewerDialog extends JDialog {
     }
 
     private JButton buildScreenshotButton() {
-        JButton btn = new JButton("Screenshot");
+        JButton btn = new JButton(get("viewer.screenshot"));
         btn.setFocusable(false);
-        btn.setToolTipText("Save current view as PNG");
+        btn.setToolTipText(get("viewer.screenshotTooltip"));
         btn.addActionListener(e -> {
             if (previewCanvas == null) return;
             previewCanvas.requestScreenshot().thenAccept(img -> {
@@ -234,7 +237,7 @@ public final class ModelViewerDialog extends JDialog {
                     if (MainWindow.lastChooserDir != null) fc.setCurrentDirectory(MainWindow.lastChooserDir);
                     String baseName = asset.fileName().replaceFirst("\\.[^.]+$", "");
                     fc.setSelectedFile(new File(baseName + ".png"));
-                    fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("PNG Image", "png"));
+                    fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(get("viewer.pngImage"), "png"));
                     if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
                         MainWindow.lastChooserDir = fc.getCurrentDirectory();
                         File file = fc.getSelectedFile();
@@ -244,7 +247,7 @@ public final class ModelViewerDialog extends JDialog {
                         try {
                             ImageIO.write(img, "PNG", file);
                         } catch (Exception ex) {
-                            MainWindow.showErrorDialog(this, "Failed to save screenshot:\n" + ex.getMessage(), "Error");
+                            MainWindow.showErrorDialog(this, fmt("viewer.failedScreenshot", ex.getMessage()), get("main.error"));
                         }
                     }
                 });
@@ -260,14 +263,14 @@ public final class ModelViewerDialog extends JDialog {
         tabs.setMinimumSize(new Dimension(280, 0));
         tabs.setPreferredSize(new Dimension(DIAG_W, 0));
 
-        tabs.addTab("Animation", buildAnimationTab());
-        tabs.addTab("Info", buildInfoTab());
-        tabs.addTab("Textures", buildTexturesTab());
-        tabs.addTab("Materials", buildMaterialsTab());
-        tabs.addTab("Geosets", buildGeosetsTab());
-        tabs.addTab("UV Map", buildUVMapTab());
+        tabs.addTab(get("viewer.tab.animation"), buildAnimationTab());
+        tabs.addTab(get("viewer.tab.info"), buildInfoTab());
+        tabs.addTab(get("viewer.tab.textures"), buildTexturesTab());
+        tabs.addTab(get("viewer.tab.materials"), buildMaterialsTab());
+        tabs.addTab(get("viewer.tab.geosets"), buildGeosetsTab());
+        tabs.addTab(get("viewer.tab.uvmap"), buildUVMapTab());
         if (parsedModel.animData().bones().length > 0) {
-            tabs.addTab("Nodes", buildNodesTab());
+            tabs.addTab(get("viewer.tab.nodes"), buildNodesTab());
         }
 
         // Clear highlights when switching away from contextual tabs
@@ -275,12 +278,12 @@ public final class ModelViewerDialog extends JDialog {
             if (previewCanvas == null) return;
             int idx = tabs.getSelectedIndex();
             String title = idx >= 0 ? tabs.getTitleAt(idx) : "";
-            if (!"Materials".equals(title)) previewCanvas.setHighlightedGeosetIndices(null);
-            if (!"Geosets".equals(title) && !"UV Map".equals(title)) {
+            if (!get("viewer.tab.materials").equals(title)) previewCanvas.setHighlightedGeosetIndices(null);
+            if (!get("viewer.tab.geosets").equals(title) && !get("viewer.tab.uvmap").equals(title)) {
                 previewCanvas.setHighlightedGeosetIdx(-1);
                 previewCanvas.setHighlightWireframe(false);
             }
-            if (!"Nodes".equals(title))     previewCanvas.setHighlightedBoneId(-1);
+            if (!get("viewer.tab.nodes").equals(title))     previewCanvas.setHighlightedBoneId(-1);
         });
 
         return tabs;
@@ -297,7 +300,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.setBorder(new EmptyBorder(12, 12, 12, 12));
 
         // Sequence selector
-        JPanel seqRow = flowRow("Animation:");
+        JPanel seqRow = flowRow(get("viewer.animation"));
         JComboBox<String> seqCombo = buildSequenceCombo(sequences);
         seqCombo.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         seqRow.add(seqCombo);
@@ -306,23 +309,23 @@ public final class ModelViewerDialog extends JDialog {
 
         // Play / Pause + Loop
         JPanel playRow = flowRow();
-        JButton playPauseBtn = new JButton("Stop");
+        JButton playPauseBtn = new JButton(get("viewer.stop"));
         playPauseBtn.setEnabled(animData.hasAnimation());
         playPauseBtn.addActionListener(e -> {
             if (previewCanvas == null) return;
             boolean nowPlaying = !previewCanvas.isPlaying();
             previewCanvas.setPlaying(nowPlaying);
-            playPauseBtn.setText(nowPlaying ? "Stop" : "Play");
+            playPauseBtn.setText(nowPlaying ? get("viewer.stop") : get("viewer.play"));
         });
-        JCheckBox loopCheckbox = new JCheckBox("Loop", true);
+        JCheckBox loopCheckbox = new JCheckBox(get("viewer.loop"), true);
         loopCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setLooping(loopCheckbox.isSelected());
         });
         // Reset button to "Play" when a non-looping animation finishes
         previewCanvas.setOnAnimationFinished(() -> {
-            playPauseBtn.setText("Play");
+            playPauseBtn.setText(get("viewer.play"));
         });
-        JButton recenterBtn = new JButton("Recenter");
+        JButton recenterBtn = new JButton(get("viewer.recenter"));
         recenterBtn.addActionListener(e -> {
             if (previewCanvas == null) return;
             int idx = seqCombo.getSelectedIndex();
@@ -356,7 +359,7 @@ public final class ModelViewerDialog extends JDialog {
                 if (!scrubbing[0]) {
                     scrubbing[0] = true;
                     previewCanvas.setPlaying(false);
-                    playPauseBtn.setText("Play");
+                    playPauseBtn.setText(get("viewer.play"));
                 }
                 previewCanvas.setAnimTimeMs(t);
             } else if (scrubbing[0]) {
@@ -367,7 +370,7 @@ public final class ModelViewerDialog extends JDialog {
         JPanel timeRow = new JPanel(new BorderLayout(6, 0));
         timeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         timeRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
-        timeRow.add(new JLabel("Time:"), BorderLayout.WEST);
+        timeRow.add(new JLabel(get("viewer.time")), BorderLayout.WEST);
         timeRow.add(timeSlider, BorderLayout.CENTER);
         timeRow.add(timeLabel, BorderLayout.EAST);
         panel.add(timeRow);
@@ -387,7 +390,7 @@ public final class ModelViewerDialog extends JDialog {
         scrubberSyncTimer.start();
 
         // Speed slider
-        JPanel speedRow = flowRow("Speed:");
+        JPanel speedRow = flowRow(get("viewer.speed"));
         JLabel speedLabel = new JLabel("1.0x");
         speedLabel.setPreferredSize(new Dimension(40, 20));
         JSlider speedSlider = new JSlider(10, 300, 100);
@@ -408,7 +411,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(Box.createVerticalStrut(8));
 
         // Extent overlay
-        JCheckBox extentCheckbox = new JCheckBox("Show Extent");
+        JCheckBox extentCheckbox = new JCheckBox(get("viewer.showExtent"));
         extentCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         extentCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowExtent(extentCheckbox.isSelected());
@@ -417,7 +420,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(Box.createVerticalStrut(6));
 
         // Node overlays
-        JCheckBox bonesCheckbox = new JCheckBox("Bones");
+        JCheckBox bonesCheckbox = new JCheckBox(get("viewer.bonesOverlay"));
         bonesCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         bonesCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowBones(bonesCheckbox.isSelected());
@@ -425,7 +428,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(bonesCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox helpersCheckbox = new JCheckBox("Helpers");
+        JCheckBox helpersCheckbox = new JCheckBox(get("viewer.helpers"));
         helpersCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         helpersCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowHelpers(helpersCheckbox.isSelected());
@@ -433,7 +436,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(helpersCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox attachmentsCheckbox = new JCheckBox("Attachments");
+        JCheckBox attachmentsCheckbox = new JCheckBox(get("viewer.attachments"));
         attachmentsCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         attachmentsCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowAttachments(attachmentsCheckbox.isSelected());
@@ -441,7 +444,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(attachmentsCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox ribbonsCheckbox = new JCheckBox("Ribbon Emitters");
+        JCheckBox ribbonsCheckbox = new JCheckBox(get("viewer.ribbonEmitters"));
         ribbonsCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         ribbonsCheckbox.setEnabled(parsedModel.ribbonEmitters().length > 0);
         ribbonsCheckbox.addActionListener(e -> {
@@ -450,7 +453,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(ribbonsCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox particlesCheckbox = new JCheckBox("Particle Emitters");
+        JCheckBox particlesCheckbox = new JCheckBox(get("viewer.particleEmitters"));
         particlesCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         particlesCheckbox.setEnabled(parsedModel.particleEmitters2().length > 0);
         particlesCheckbox.addActionListener(e -> {
@@ -459,7 +462,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(particlesCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox nodeNamesCheckbox = new JCheckBox("Node Names");
+        JCheckBox nodeNamesCheckbox = new JCheckBox(get("viewer.nodeNames"));
         nodeNamesCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         nodeNamesCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowNodeNames(nodeNamesCheckbox.isSelected());
@@ -468,7 +471,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(Box.createVerticalStrut(6));
 
         // Node size slider
-        JPanel nodeSizeRow = flowRow("Node Size:");
+        JPanel nodeSizeRow = flowRow(get("viewer.nodeSize"));
         JLabel nodeSizeLabel = new JLabel("3.0");
         nodeSizeLabel.setPreferredSize(new Dimension(30, 20));
         JSlider nodeSizeSlider = new JSlider(5, 200, 30); // 0.5 to 20.0 (÷10)
@@ -484,7 +487,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(Box.createVerticalStrut(6));
 
         // Collision shapes overlay
-        JCheckBox collisionCheckbox = new JCheckBox("Collision Shapes");
+        JCheckBox collisionCheckbox = new JCheckBox(get("viewer.collisionShapes"));
         collisionCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         collisionCheckbox.setEnabled(parsedModel.collisionShapes().length > 0);
         collisionCheckbox.addActionListener(e -> {
@@ -494,7 +497,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(Box.createVerticalStrut(6));
 
         // Grid toggle
-        JCheckBox gridCheckbox = new JCheckBox("Show Grid", true);
+        JCheckBox gridCheckbox = new JCheckBox(get("viewer.showGrid"), true);
         gridCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         gridCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowGrid(gridCheckbox.isSelected());
@@ -504,7 +507,7 @@ public final class ModelViewerDialog extends JDialog {
 
         // Camera View checkbox
         CameraNode[] cameras = parsedModel.cameras();
-        JCheckBox cameraViewCheckbox = new JCheckBox("Camera View");
+        JCheckBox cameraViewCheckbox = new JCheckBox(get("viewer.cameraView"));
         cameraViewCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         cameraViewCheckbox.setEnabled(cameras.length > 0);
         cameraViewCheckbox.addActionListener(e -> {
@@ -520,7 +523,7 @@ public final class ModelViewerDialog extends JDialog {
         panel.add(Box.createVerticalStrut(6));
 
         // Team color selector
-        JPanel tcRow = flowRow("Team Color:");
+        JPanel tcRow = flowRow(get("viewer.teamColor"));
         JComboBox<String> tcCombo = new JComboBox<>(TeamColorOptions.labels());
         tcCombo.setSelectedIndex(previewCanvas != null ? previewCanvas.getTeamColor() : 0);
         tcCombo.setRenderer(new TeamColorComboRenderer(tcCombo, idx -> {
@@ -578,27 +581,27 @@ public final class ModelViewerDialog extends JDialog {
     // ── Info tab ─────────────────────────────────────────────────────────
 
     private JScrollPane buildInfoTab() {
-        NumberFormat fmt = NumberFormat.getIntegerInstance();
+        NumberFormat nfmt = NumberFormat.getIntegerInstance();
         ModelMesh mesh = parsedModel.mesh();
         ModelAnimData animData = parsedModel.animData();
         ModelMetadata meta = parsedModel.metadata();
 
         String polygons = meta.polygonCount() >= 0
-                ? fmt.format(meta.polygonCount()) : "N/A";
+                ? nfmt.format(meta.polygonCount()) : get("main.na");
 
         String mName = meta.modelName();
         String[][] rows = {
-                {"File", asset.fileName()},
-                {"Model Name", mName.isEmpty() ? "N/A" : mName},
-                {"Path", asset.path().toString()},
-                {"Size", formatFileSize(asset.fileSizeBytes())},
-                {"Vertices", fmt.format(mesh.vertices().length / 3)},
-                {"Polygons", polygons},
-                {"Bones", String.valueOf(animData.bones().length)},
-                {"Geosets", String.valueOf(animData.geosets().size())},
-                {"Sequences", String.valueOf(animData.sequences().size())},
-                {"Textures", String.valueOf(parsedModel.texData().length)},
-                {"Bounding Radius", String.format("%.2f", mesh.radius())},
+                {get("viewer.info.file"), asset.fileName()},
+                {get("viewer.info.modelName"), mName.isEmpty() ? get("main.na") : mName},
+                {get("viewer.info.path"), asset.path().toString()},
+                {get("viewer.info.size"), formatFileSize(asset.fileSizeBytes())},
+                {get("viewer.info.vertices"), nfmt.format(mesh.vertices().length / 3)},
+                {get("viewer.info.polygons"), polygons},
+                {get("viewer.info.bones"), String.valueOf(animData.bones().length)},
+                {get("viewer.info.geosets"), String.valueOf(animData.geosets().size())},
+                {get("viewer.info.sequences"), String.valueOf(animData.sequences().size())},
+                {get("viewer.info.textures"), String.valueOf(parsedModel.texData().length)},
+                {get("viewer.info.boundingRadius"), String.format("%.2f", mesh.radius())},
         };
 
         JPanel grid = new JPanel(new GridBagLayout());
@@ -669,19 +672,19 @@ public final class ModelViewerDialog extends JDialog {
             uniqueList.add(new TexEntry(path, repId, source));
         }
 
-        JLabel header = new JLabel("Textures (" + uniqueList.size() + ")");
+        JLabel header = new JLabel(fmt("viewer.textures.header", uniqueList.size()));
         header.setFont(header.getFont().deriveFont(Font.BOLD));
         header.setBorder(new EmptyBorder(0, 0, 6, 0));
         panel.add(header, BorderLayout.NORTH);
 
         DefaultTableModel tableModel = new DefaultTableModel(
-                new String[]{"#", "Path", "Source"}, 0) {
+                new String[]{get("viewer.textures.colIndex"), get("viewer.textures.colPath"), get("viewer.textures.colSource")}, 0) {
             @Override public boolean isCellEditable(int row, int col) { return false; }
         };
 
         for (int i = 0; i < uniqueList.size(); i++) {
             TexEntry te = uniqueList.get(i);
-            tableModel.addRow(new Object[]{i, te.path().isEmpty() ? "(no texture)" : te.path(), te.source()});
+            tableModel.addRow(new Object[]{i, te.path().isEmpty() ? get("viewer.textures.noTexture") : te.path(), te.source()});
         }
 
         JTable table = new JTable(tableModel);
@@ -712,7 +715,7 @@ public final class ModelViewerDialog extends JDialog {
 
         // Double-click to show texture popup, right-click to copy path
         javax.swing.JPopupMenu texPopup = new javax.swing.JPopupMenu();
-        javax.swing.JMenuItem copyPathItem = new javax.swing.JMenuItem("Copy Path");
+        javax.swing.JMenuItem copyPathItem = new javax.swing.JMenuItem(get("viewer.textures.copyPath"));
         copyPathItem.addActionListener(e -> {
             int row = table.getSelectedRow();
             if (row >= 0) {
@@ -798,7 +801,7 @@ public final class ModelViewerDialog extends JDialog {
             String texPath = uniqueList.get(row).path();
             if (texPath.isEmpty()) {
                 previewImg[0] = null;
-                previewInfo.setText("(no texture)");
+                previewInfo.setText(get("viewer.textures.noTexture"));
                 imgPanel.repaint();
                 return;
             }
@@ -808,7 +811,7 @@ public final class ModelViewerDialog extends JDialog {
                 previewInfo.setText(String.format("%s    %d x %d", texPath, img.getWidth(), img.getHeight()));
             } else {
                 previewImg[0] = null;
-                previewInfo.setText("Texture not found");
+                previewInfo.setText(get("viewer.textures.textureNotFound"));
             }
             imgPanel.repaint();
         });
@@ -830,13 +833,13 @@ public final class ModelViewerDialog extends JDialog {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(new EmptyBorder(8, 8, 8, 8));
 
-        JLabel header = new JLabel("Materials (" + materials.length + ")");
+        JLabel header = new JLabel(fmt("viewer.materials.header", materials.length));
         header.setFont(header.getFont().deriveFont(Font.BOLD));
         header.setBorder(new EmptyBorder(0, 0, 6, 0));
         panel.add(header, BorderLayout.NORTH);
 
         if (materials.length == 0) {
-            panel.add(new JLabel("No materials found.", JLabel.CENTER), BorderLayout.CENTER);
+            panel.add(new JLabel(get("viewer.materials.none"), JLabel.CENTER), BorderLayout.CENTER);
             return panel;
         }
 
@@ -859,7 +862,7 @@ public final class ModelViewerDialog extends JDialog {
 
         for (MaterialInfo mat : materials) {
             StringBuilder matLabel = new StringBuilder();
-            matLabel.append("Material ").append(mat.index());
+            matLabel.append(fmt("viewer.materials.material", mat.index()));
             if (mat.priorityPlane() != 0) matLabel.append("  PP=").append(mat.priorityPlane());
             if (!mat.shader().isEmpty()) matLabel.append("  Shader=").append(mat.shader());
             List<Integer> usedBy = matToGeosets.getOrDefault(mat.index(), List.of());
@@ -881,8 +884,7 @@ public final class ModelViewerDialog extends JDialog {
             for (int li = 0; li < mat.layers().size(); li++) {
                 MaterialInfo.LayerInfo layer = mat.layers().get(li);
                 StringBuilder layerLabel = new StringBuilder();
-                layerLabel.append("Layer ").append(li).append(": ");
-                layerLabel.append(layer.filterModeName());
+                layerLabel.append(fmt("viewer.materials.layer", li, layer.filterModeName()));
 
                 if (!layer.texturePath().isEmpty()) {
                     layerLabel.append("  \"").append(layer.texturePath()).append("\"");
@@ -893,7 +895,7 @@ public final class ModelViewerDialog extends JDialog {
                 } else if (layer.replaceableId() > 0) {
                     layerLabel.append("  Replaceable(").append(layer.replaceableId()).append(")");
                 } else {
-                    layerLabel.append("  (no texture)");
+                    layerLabel.append("  ").append(get("viewer.textures.noTexture"));
                 }
 
                 if (layer.alpha() < 1.0f) {
@@ -1022,14 +1024,14 @@ public final class ModelViewerDialog extends JDialog {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(new EmptyBorder(8, 8, 8, 8));
 
-        JLabel header = new JLabel("Geosets");
+        JLabel header = new JLabel(get("viewer.geosets.header"));
         header.setFont(header.getFont().deriveFont(Font.BOLD));
         header.setBorder(new EmptyBorder(0, 0, 6, 0));
         panel.add(header, BorderLayout.NORTH);
 
         GeosetTexData[] texData = parsedModel.texData();
         ModelAnimData animData = parsedModel.animData();
-        NumberFormat fmt = NumberFormat.getIntegerInstance();
+        NumberFormat nfmt = NumberFormat.getIntegerInstance();
 
         // Build geoset info entries
         DefaultListModel<GeosetEntry> listModel = new DefaultListModel<>();
@@ -1044,18 +1046,18 @@ public final class ModelViewerDialog extends JDialog {
             String replStr = replId == 1 ? "TeamColor" : replId == 2 ? "TeamGlow" : replId > 0 ? String.valueOf(replId) : null;
 
             StringBuilder detail = new StringBuilder();
-            detail.append("Verts: ").append(fmt.format(vc));
-            if (skin.materialId() >= 0) detail.append("  Mat: ").append(skin.materialId());
-            detail.append("  Filter: ").append(filterModeName(texData[gi].filterMode()));
-            if (replStr != null) detail.append("  Repl: ").append(replStr);
-            if (skin.hasSkinning()) detail.append("  Skinned");
+            detail.append(fmt("viewer.geosets.verts", nfmt.format(vc)));
+            if (skin.materialId() >= 0) detail.append("  ").append(fmt("viewer.geosets.mat", skin.materialId()));
+            detail.append("  ").append(fmt("viewer.geosets.filter", filterModeName(texData[gi].filterMode())));
+            if (replStr != null) detail.append("  ").append(fmt("viewer.geosets.repl", replStr));
+            if (skin.hasSkinning()) detail.append("  ").append(get("viewer.geosets.skinned"));
 
-            listModel.addElement(new GeosetEntry(gi, texPath.isEmpty() ? "(no texture)" : texPath, detail.toString()));
+            listModel.addElement(new GeosetEntry(gi, texPath.isEmpty() ? get("viewer.textures.noTexture") : texPath, detail.toString()));
             gi++;
         }
 
         if (listModel.isEmpty()) {
-            panel.add(new JLabel("No geoset data available.", JLabel.CENTER), BorderLayout.CENTER);
+            panel.add(new JLabel(get("viewer.materials.noGeosetData"), JLabel.CENTER), BorderLayout.CENTER);
             return panel;
         }
 
@@ -1077,7 +1079,7 @@ public final class ModelViewerDialog extends JDialog {
             cb.setOpaque(false);
             cell.add(cb, BorderLayout.WEST);
 
-            JLabel title = new JLabel("Geoset " + entry.geosetIdx);
+            JLabel title = new JLabel(fmt("viewer.geosets.geoset", entry.geosetIdx));
             title.setFont(title.getFont().deriveFont(Font.BOLD, 12f));
             JLabel tex = new JLabel(entry.texturePath);
             tex.setFont(tex.getFont().deriveFont(Font.PLAIN, 11f));
@@ -1149,7 +1151,7 @@ public final class ModelViewerDialog extends JDialog {
     }
 
     private record GeosetEntry(int geosetIdx, String texturePath, String detail) {
-        @Override public String toString() { return "Geoset " + geosetIdx; }
+        @Override public String toString() { return fmt("viewer.geosets.geoset", geosetIdx); }
     }
 
     // ── UV Map tab ────────────────────────────────────────────────────────
@@ -1196,29 +1198,29 @@ public final class ModelViewerDialog extends JDialog {
         JComboBox<String> geoCombo = new JComboBox<>();
         for (int gi = 0; gi < geoCount; gi++) {
             String texName = texData[gi].texturePath();
-            if (texName.isEmpty()) texName = "(no texture)";
+            if (texName.isEmpty()) texName = get("viewer.textures.noTexture");
             int sep = Math.max(texName.lastIndexOf('\\'), texName.lastIndexOf('/'));
             if (sep >= 0) texName = texName.substring(sep + 1);
-            geoCombo.addItem("Geoset " + gi + " — " + texName);
+            geoCombo.addItem(fmt("viewer.uvmap.geosetItem", gi, texName));
         }
 
         // Options row
-        JCheckBox alphaToggle = new JCheckBox("Alpha", false);
-        alphaToggle.setToolTipText("Show texture transparency with checkerboard background");
-        JCheckBox highlightToggle = new JCheckBox("Highlight", true);
-        highlightToggle.setToolTipText("Highlight selected geoset in 3D view");
-        JComboBox<String> highlightMode = new JComboBox<>(new String[]{"Overlay", "Wireframe"});
-        highlightMode.setToolTipText("3D highlight style");
+        JCheckBox alphaToggle = new JCheckBox(get("viewer.uvmap.alpha"), false);
+        alphaToggle.setToolTipText(get("viewer.uvmap.alphaTooltip"));
+        JCheckBox highlightToggle = new JCheckBox(get("viewer.uvmap.highlight"), true);
+        highlightToggle.setToolTipText(get("viewer.uvmap.highlightTooltip"));
+        JComboBox<String> highlightMode = new JComboBox<>(new String[]{get("viewer.uvmap.overlay"), get("viewer.uvmap.wireframe")});
+        highlightMode.setToolTipText(get("viewer.uvmap.highlightStyleTooltip"));
 
         JPanel topPanel = new JPanel();
         topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
 
         JPanel geoRow = new JPanel(new BorderLayout(4, 0));
-        geoRow.add(new JLabel("Geoset: "), BorderLayout.WEST);
+        geoRow.add(new JLabel(get("viewer.uvmap.geoset")), BorderLayout.WEST);
         geoRow.add(geoCombo, BorderLayout.CENTER);
 
-        JCheckBox vertexDotsToggle = new JCheckBox("Vertices", false);
-        vertexDotsToggle.setToolTipText("Show UV vertex positions as dots");
+        JCheckBox vertexDotsToggle = new JCheckBox(get("viewer.uvmap.vertices"), false);
+        vertexDotsToggle.setToolTipText(get("viewer.uvmap.verticesTooltip"));
 
         JPanel optRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         optRow.add(alphaToggle);
@@ -1368,7 +1370,7 @@ public final class ModelViewerDialog extends JDialog {
         JComboBox<String> layerCombo = new JComboBox<>();
         JPanel layerRow = new JPanel(new BorderLayout(4, 0));
         layerRow.setBorder(new EmptyBorder(4, 0, 0, 0));
-        layerRow.add(new JLabel("Layer: "), BorderLayout.WEST);
+        layerRow.add(new JLabel(get("viewer.uvmap.layer")), BorderLayout.WEST);
         layerRow.add(layerCombo, BorderLayout.CENTER);
         layerRow.setVisible(false);
 
@@ -1392,7 +1394,7 @@ public final class ModelViewerDialog extends JDialog {
                 return;
             }
             int gi = geoCombo.getSelectedIndex();
-            previewCanvas.setHighlightWireframe("Wireframe".equals(highlightMode.getSelectedItem()));
+            previewCanvas.setHighlightWireframe(highlightMode.getSelectedIndex() == 1);
             previewCanvas.setHighlightedGeosetIdx(gi);
         };
 
@@ -1417,7 +1419,7 @@ public final class ModelViewerDialog extends JDialog {
                     String name = layer.texturePath();
                     int sep = Math.max(name.lastIndexOf('\\'), name.lastIndexOf('/'));
                     if (sep >= 0) name = name.substring(sep + 1);
-                    layerCombo.addItem("Layer " + li + " — " + name);
+                    layerCombo.addItem(fmt("viewer.uvmap.layerItem", li, name));
                 }
                 layerRow.setVisible(true);
             } else {
@@ -1437,7 +1439,7 @@ public final class ModelViewerDialog extends JDialog {
             int[] indices = perGeoIndices[gi];
             int triCount = indices != null ? indices.length / 3 : 0;
             int vertCount = uvs != null ? uvs.length / 2 : 0;
-            infoLabel.setText(String.format("Vertices: %d  Triangles: %d", vertCount, triCount));
+            infoLabel.setText(fmt("viewer.uvmap.info", vertCount, triCount));
 
             applyHighlight.run();
             uvPanel.repaint();
@@ -1492,7 +1494,7 @@ public final class ModelViewerDialog extends JDialog {
         area.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, 12));
         JScrollPane scroll = new JScrollPane(area);
         scroll.setPreferredSize(new Dimension(700, 400));
-        JOptionPane.showMessageDialog(this, scroll, "Render Error – " + asset.fileName(), JOptionPane.ERROR_MESSAGE);
+        JOptionPane.showMessageDialog(this, scroll, fmt("viewer.renderError", asset.fileName()), JOptionPane.ERROR_MESSAGE);
     }
 
     /** Draw an edge only once — deduplicates shared triangle edges. */
@@ -1509,8 +1511,8 @@ public final class ModelViewerDialog extends JDialog {
     private static ImageIcon boneIcon, helperIcon, attachmentIcon, ribbonIcon, particle2Icon;
     static {
         try {
-            var enabledImg = ImageIO.read(ModelViewerDialog.class.getResourceAsStream("/observer-icon-hover.png"));
-            var disabledImg = ImageIO.read(ModelViewerDialog.class.getResourceAsStream("/observer-icon-disabled.png"));
+            var enabledImg = ImageIO.read(ModelViewerDialog.class.getResourceAsStream("/images/observer-icon-hover.png"));
+            var disabledImg = ImageIO.read(ModelViewerDialog.class.getResourceAsStream("/images/observer-icon-disabled.png"));
             eyeEnabledIcon = new ImageIcon(enabledImg.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH));
             eyeDisabledIcon = new ImageIcon(disabledImg.getScaledInstance(ICON_SIZE, ICON_SIZE, Image.SCALE_SMOOTH));
         } catch (Exception ex) {
@@ -1518,11 +1520,11 @@ public final class ModelViewerDialog extends JDialog {
             eyeDisabledIcon = null;
         }
         try {
-            boneIcon       = loadNodeIcon("/bone.png");
-            helperIcon     = loadNodeIcon("/helperhand.png");
-            attachmentIcon = loadNodeIcon("/attachment.png");
-            ribbonIcon     = loadNodeIcon("/ribbon.png");
-            particle2Icon  = loadNodeIcon("/particle2.png");
+            boneIcon       = loadNodeIcon("/images/bone.png");
+            helperIcon     = loadNodeIcon("/images/helperhand.png");
+            attachmentIcon = loadNodeIcon("/images/attachment.png");
+            ribbonIcon     = loadNodeIcon("/images/ribbon.png");
+            particle2Icon  = loadNodeIcon("/images/particle2.png");
         } catch (Exception ex) {
             boneIcon = helperIcon = attachmentIcon = ribbonIcon = particle2Icon = null;
         }
@@ -1673,7 +1675,7 @@ public final class ModelViewerDialog extends JDialog {
 
     private static JComboBox<String> buildSequenceCombo(List<SequenceInfo> sequences) {
         if (sequences.isEmpty()) {
-            return new JComboBox<>(new String[]{"(No sequences)"});
+            return new JComboBox<>(new String[]{get("viewer.noSequences")});
         }
         String[] labels = sequences.stream()
                 .map(SequenceInfo::displayLabel)
@@ -1692,9 +1694,9 @@ public final class ModelViewerDialog extends JDialog {
     }
 
     private static String formatFileSize(long bytes) {
-        if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
-        return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
+        if (bytes < 1024) return fmt("filesize.bytes", bytes);
+        if (bytes < 1024 * 1024) return fmt("filesize.kb", String.format("%.1f", bytes / 1024.0));
+        return fmt("filesize.mb", String.format("%.1f", bytes / (1024.0 * 1024.0)));
     }
 
     private void showTexturePopup(List<String> allPaths, int startIndex) {
@@ -1712,7 +1714,7 @@ public final class ModelViewerDialog extends JDialog {
             if (texPaths.get(i).equals(startPath)) { currentPos[0] = i; break; }
         }
 
-        JDialog popup = new JDialog(this, "Texture Preview", true);
+        JDialog popup = new JDialog(this, get("viewer.texPopup.title"), true);
         popup.setLayout(new BorderLayout(4, 4));
 
         // State
@@ -1791,12 +1793,12 @@ public final class ModelViewerDialog extends JDialog {
 
         Runnable refreshImage = () -> {
             String texPath = texPaths.get(currentPos[0]);
-            popup.setTitle("Texture – " + texPath + " (" + (currentPos[0] + 1) + "/" + texPaths.size() + ")");
+            popup.setTitle(fmt("viewer.texPopup.texture", texPath, currentPos[0] + 1, texPaths.size()));
 
             Path modelDir = asset.path().getParent();
             BufferedImage img = GameDataSource.getInstance().loadTexture(texPath, modelDir, scanRoot);
             if (img == null) {
-                infoLabel.setText("Texture not found: " + texPath);
+                infoLabel.setText(fmt("viewer.texPopup.notFound", texPath));
                 currentImg[0] = null;
                 imgPanel.repaint();
                 return;
@@ -1805,8 +1807,8 @@ public final class ModelViewerDialog extends JDialog {
             BufferedImage display = showAlpha[0] ? extractAlphaChannel(img) : img;
             currentImg[0] = display;
 
-            infoLabel.setText(String.format("%s    %d x %d    %s    (%.0f%%)",
-                    texPath, img.getWidth(), img.getHeight(), imageTypeName(img.getType()), zoom[0] * 100));
+            infoLabel.setText(fmt("viewer.texPopup.info",
+                    texPath, img.getWidth(), img.getHeight(), imageTypeName(img.getType()), (int)(zoom[0] * 100)));
 
             imgPanel.repaint();
         };
@@ -1822,8 +1824,8 @@ public final class ModelViewerDialog extends JDialog {
         JButton prevBtn = new JButton("<");
         JButton nextBtn = new JButton(">");
         JButton resetBtn = new JButton("1:1");
-        JCheckBox alphaCb = new JCheckBox("Alpha");
-        JCheckBox checkerCb = new JCheckBox("Checkerboard", true);
+        JCheckBox alphaCb = new JCheckBox(get("viewer.texPopup.alpha"));
+        JCheckBox checkerCb = new JCheckBox(get("viewer.texPopup.checkerboard"), true);
 
         prevBtn.addActionListener(e -> {
             currentPos[0] = (currentPos[0] - 1 + texPaths.size()) % texPaths.size();
@@ -1833,7 +1835,7 @@ public final class ModelViewerDialog extends JDialog {
             currentPos[0] = (currentPos[0] + 1) % texPaths.size();
             resetAndRefresh.run();
         });
-        resetBtn.setToolTipText("Reset zoom & pan");
+        resetBtn.setToolTipText(get("viewer.texPopup.resetZoom"));
         resetBtn.addActionListener(e -> resetAndRefresh.run());
         alphaCb.addActionListener(e -> { showAlpha[0] = alphaCb.isSelected(); refreshImage.run(); });
         checkerCb.addActionListener(e -> { showCheckerboard[0] = checkerCb.isSelected(); imgPanel.repaint(); });
@@ -1881,25 +1883,25 @@ public final class ModelViewerDialog extends JDialog {
 
     private static String filterModeName(int mode) {
         return switch (mode) {
-            case 0 -> "None";
-            case 1 -> "Transparent";
-            case 2 -> "Blend";
-            case 3 -> "Additive";
-            case 4 -> "AddAlpha";
-            case 5 -> "Modulate";
-            case 6 -> "Modulate2x";
-            default -> "Unknown (" + mode + ")";
+            case 0 -> get("viewer.filter.none");
+            case 1 -> get("viewer.filter.transparent");
+            case 2 -> get("viewer.filter.blend");
+            case 3 -> get("viewer.filter.additive");
+            case 4 -> get("viewer.filter.addAlpha");
+            case 5 -> get("viewer.filter.modulate");
+            case 6 -> get("viewer.filter.modulate2x");
+            default -> fmt("viewer.filter.unknown", mode);
         };
     }
 
     private static String imageTypeName(int type) {
         return switch (type) {
-            case BufferedImage.TYPE_INT_ARGB   -> "ARGB";
-            case BufferedImage.TYPE_INT_RGB    -> "RGB";
-            case BufferedImage.TYPE_4BYTE_ABGR -> "4B ABGR";
-            case BufferedImage.TYPE_3BYTE_BGR  -> "3B BGR";
-            case BufferedImage.TYPE_BYTE_INDEXED -> "Indexed";
-            default -> "Type " + type;
+            case BufferedImage.TYPE_INT_ARGB   -> get("viewer.imgType.argb");
+            case BufferedImage.TYPE_INT_RGB    -> get("viewer.imgType.rgb");
+            case BufferedImage.TYPE_4BYTE_ABGR -> get("viewer.imgType.4babgr");
+            case BufferedImage.TYPE_3BYTE_BGR  -> get("viewer.imgType.3bbgr");
+            case BufferedImage.TYPE_BYTE_INDEXED -> get("viewer.imgType.indexed");
+            default -> fmt("viewer.imgType.unknown", type);
         };
     }
 }

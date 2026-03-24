@@ -1,5 +1,8 @@
 package org.example.ui;
 
+import static org.example.i18n.Messages.get;
+import static org.example.i18n.Messages.fmt;
+import org.example.i18n.Messages;
 import org.example.model.*;
 import org.example.model.ExternalProgram;
 import org.example.model.ThumbnailQuality;
@@ -91,13 +94,21 @@ public final class SettingsDialog extends JDialog {
     private final JLabel  pitchLabel  = new JLabel(pitchSlider.getValue() + "\u00B0");
     private final JTextField animNameField = new JTextField("Stand", 12);
     private final JComboBox<ThumbnailQuality> qualityCombo = new JComboBox<>(ThumbnailQuality.values());
+    private record LanguageEntry(String code, String labelKey) {
+        @Override public String toString() { return org.example.i18n.Messages.get(labelKey); }
+    }
+    private static final LanguageEntry[] LANGUAGES = {
+            new LanguageEntry("en", "lang.en"),
+            new LanguageEntry("fr", "lang.fr"),
+    };
+    private final JComboBox<LanguageEntry> languageCombo = new JComboBox<>(LANGUAGES);
     private final DefaultListModel<ExternalProgram> extProgListModel = new DefaultListModel<>();
     private final JList<ExternalProgram> extProgList = new JList<>(extProgListModel);
     private GlPreviewCanvas cameraPreview;  // small 3D preview in Camera tab
     private Path previewTempFile;           // temp file for extracted preview model
 
     public SettingsDialog(JFrame owner, AppSettings settings) {
-        super(owner, "Settings", true);
+        super(owner, get("settings.title"), true);
         this.settings = settings;
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setSize(new Dimension(620, 560));
@@ -106,10 +117,10 @@ public final class SettingsDialog extends JDialog {
         setLocationRelativeTo(owner);
 
         JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("Data Sources",      buildDataSourcesPanel());
-        tabs.addTab("Theme",             buildThemePanel());
-        tabs.addTab("Camera",            buildCameraPanel());
-        tabs.addTab("External Programs", buildExternalProgramsPanel());
+        tabs.addTab(get("settings.dataSources"),      buildDataSourcesPanel());
+        tabs.addTab(get("settings.theme"),             buildThemePanel());
+        tabs.addTab(get("settings.camera"),            buildCameraPanel());
+        tabs.addTab(get("settings.externalPrograms"), buildExternalProgramsPanel());
 
         setLayout(new BorderLayout(8, 8));
         add(tabs,            BorderLayout.CENTER);
@@ -139,35 +150,35 @@ public final class SettingsDialog extends JDialog {
 
         // CASC row
         JPanel cascPanel = new JPanel(new GridBagLayout());
-        cascPanel.setBorder(BorderFactory.createTitledBorder("CASC Archive (Warcraft III Reforged installation)"));
+        cascPanel.setBorder(BorderFactory.createTitledBorder(get("settings.casc.title")));
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(4, 6, 4, 6);
 
         gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0;
-        cascPanel.add(new JLabel("Path:"), gbc);
+        cascPanel.add(new JLabel(get("settings.casc.path")), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         cascPanel.add(cascPathField, gbc);
 
         gbc.gridx = 2; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
-        JButton browseCascBtn = new JButton("Browse…");
+        JButton browseCascBtn = new JButton(get("settings.casc.browse"));
         browseCascBtn.addActionListener(e -> browseCascDirectory());
         cascPanel.add(browseCascBtn, gbc);
 
         gbc.gridx = 1; gbc.gridy = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.gridwidth = 2;
-        JLabel hint = new JLabel("<html><font color='gray'>Point to the WC3 install folder that contains the _retail_ or Data sub-folder</font></html>");
+        JLabel hint = new JLabel("<html><font color='gray'>" + get("settings.casc.hint") + "</font></html>");
         cascPanel.add(hint, gbc);
 
         // MPQ panel
         JPanel mpqPanel = new JPanel(new BorderLayout(6, 6));
-        mpqPanel.setBorder(BorderFactory.createTitledBorder("MPQ Archives (classic Warcraft III)"));
+        mpqPanel.setBorder(BorderFactory.createTitledBorder(get("settings.mpq.title")));
 
         mpqList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         mpqPanel.add(new JScrollPane(mpqList), BorderLayout.CENTER);
 
         JPanel mpqButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        JButton addMpqBtn    = new JButton("Add…");
-        JButton removeMpqBtn = new JButton("Remove");
+        JButton addMpqBtn    = new JButton(get("settings.mpq.add"));
+        JButton removeMpqBtn = new JButton(get("settings.mpq.remove"));
         addMpqBtn.addActionListener(e -> addMpqFile());
         removeMpqBtn.addActionListener(e -> removeSelectedMpq());
         mpqButtons.add(addMpqBtn);
@@ -188,7 +199,7 @@ public final class SettingsDialog extends JDialog {
         gbc.anchor = GridBagConstraints.WEST;
 
         gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0;
-        panel.add(new JLabel("Look & Feel:"), gbc);
+        panel.add(new JLabel(get("settings.lookAndFeel")), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         themeCombo.addActionListener(e -> {
@@ -197,17 +208,24 @@ public final class SettingsDialog extends JDialog {
         });
         panel.add(themeCombo, gbc);
 
+        // Language row
+        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1; gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        panel.add(new JLabel(get("settings.language")), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(languageCombo, gbc);
+
         // Background color row
         gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 1; gbc.weightx = 0;
         gbc.fill = GridBagConstraints.NONE;
-        panel.add(new JLabel("3D Background:"), gbc);
+        panel.add(new JLabel(get("settings.bgColor")), gbc);
 
         gbc.gridx = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
         bgColorButton.setPreferredSize(new Dimension(80, 26));
         bgColorButton.setBackground(bgColor);
         bgColorButton.setOpaque(true);
         bgColorButton.addActionListener(e -> {
-            Color chosen = JColorChooser.showDialog(this, "Choose Background Color", bgColor);
+            Color chosen = JColorChooser.showDialog(this, get("settings.chooseBgColor"), bgColor);
             if (chosen != null) {
                 bgColor = chosen;
                 bgColorButton.setBackground(bgColor);
@@ -239,12 +257,12 @@ public final class SettingsDialog extends JDialog {
         // Description
         gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 3; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(new JLabel("<html>Default camera angles for the model viewer and thumbnail generation.</html>"), gbc);
+        controls.add(new JLabel("<html>" + get("settings.cameraDesc") + "</html>"), gbc);
 
         // Yaw (azimuth) slider
         gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1; gbc.weightx = 0;
         gbc.fill = GridBagConstraints.NONE;
-        controls.add(new JLabel("Azimuth (yaw):"), gbc);
+        controls.add(new JLabel(get("settings.yaw")), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         yawSlider.setMajorTickSpacing(90);
@@ -263,7 +281,7 @@ public final class SettingsDialog extends JDialog {
 
         // Pitch (elevation) slider
         gbc.gridx = 0; gbc.gridy = 2; gbc.weightx = 0;
-        controls.add(new JLabel("Elevation (pitch):"), gbc);
+        controls.add(new JLabel(get("settings.pitch")), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         pitchSlider.setMajorTickSpacing(30);
@@ -283,33 +301,33 @@ public final class SettingsDialog extends JDialog {
         // Thumbnail animation name
         gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 1; gbc.weightx = 0;
         gbc.fill = GridBagConstraints.NONE;
-        controls.add(new JLabel("Thumbnail animation:"), gbc);
+        controls.add(new JLabel(get("settings.thumbnailAnim")), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         controls.add(animNameField, gbc);
 
         gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 3; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(new JLabel("<html><font color='gray'>Animation name used for thumbnail pose (e.g. Stand, Attack). Leave empty for bind pose.</font></html>"), gbc);
+        controls.add(new JLabel("<html><font color='gray'>" + get("settings.thumbnailAnimHint") + "</font></html>"), gbc);
 
         // Thumbnail quality
         gbc.gridx = 0; gbc.gridy = 5; gbc.gridwidth = 1; gbc.weightx = 0;
         gbc.fill = GridBagConstraints.NONE;
-        controls.add(new JLabel("Thumbnail quality:"), gbc);
+        controls.add(new JLabel(get("settings.thumbnailQuality")), gbc);
 
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         controls.add(qualityCombo, gbc);
 
         gbc.gridx = 0; gbc.gridy = 6; gbc.gridwidth = 3; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        controls.add(new JLabel("<html><font color='gray'>Higher quality renders at a larger resolution then downscales. Uses more GPU time.</font></html>"), gbc);
+        controls.add(new JLabel("<html><font color='gray'>" + get("settings.thumbnailQualityHint") + "</font></html>"), gbc);
 
         outer.add(controls, BorderLayout.NORTH);
 
         // ── 3D Preview (center, fills remaining space) ──
         JPanel previewPanel = new JPanel(new BorderLayout());
-        previewPanel.setBorder(BorderFactory.createTitledBorder("Preview"));
-        JLabel loadingLabel = new JLabel("Loading preview model…", JLabel.CENTER);
+        previewPanel.setBorder(BorderFactory.createTitledBorder(get("settings.preview")));
+        JLabel loadingLabel = new JLabel(get("settings.loadingPreview"), JLabel.CENTER);
         previewPanel.add(loadingLabel, BorderLayout.CENTER);
         outer.add(previewPanel, BorderLayout.CENTER);
 
@@ -328,7 +346,7 @@ public final class SettingsDialog extends JDialog {
                 try {
                     ReterasParsedModel parsed = get();
                     if (parsed == null || parsed == ReterasParsedModel.EMPTY) {
-                        loadingLabel.setText("No preview (footman.mdx not found in data sources)");
+                        loadingLabel.setText(Messages.get("settings.noPreview"));
                         return;
                     }
                     previewPanel.remove(loadingLabel);
@@ -344,7 +362,7 @@ public final class SettingsDialog extends JDialog {
                     previewPanel.revalidate();
                     previewPanel.repaint();
                 } catch (Exception ex) {
-                    loadingLabel.setText("Preview failed: " + ex.getMessage());
+                    loadingLabel.setText(fmt("settings.previewFailed", ex.getMessage()));
                 }
             }
         }.execute();
@@ -373,7 +391,7 @@ public final class SettingsDialog extends JDialog {
         JPanel outer = new JPanel(new BorderLayout(8, 12));
         outer.setBorder(BorderFactory.createEmptyBorder(12, 12, 4, 12));
 
-        outer.add(new JLabel("<html>Configure external 3D programs to open models with (right-click a thumbnail).</html>"),
+        outer.add(new JLabel("<html>" + get("settings.extProg.desc") + "</html>"),
                 BorderLayout.NORTH);
 
         extProgList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -398,9 +416,9 @@ public final class SettingsDialog extends JDialog {
         });
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        JButton addBtn = new JButton("Add…");
-        JButton editBtn = new JButton("Edit…");
-        JButton removeBtn = new JButton("Remove");
+        JButton addBtn = new JButton(get("settings.extProg.add"));
+        JButton editBtn = new JButton(get("settings.extProg.edit"));
+        JButton removeBtn = new JButton(get("settings.extProg.remove"));
         addBtn.addActionListener(e -> addExternalProgram());
         editBtn.addActionListener(e -> editSelectedExternalProgram());
         removeBtn.addActionListener(e -> {
@@ -416,7 +434,7 @@ public final class SettingsDialog extends JDialog {
     }
 
     private void addExternalProgram() {
-        ExternalProgram result = showExternalProgramDialog("Add External Program", "", "", "");
+        ExternalProgram result = showExternalProgramDialog(get("settings.extProg.addTitle"), "", "", "");
         if (result != null) {
             extProgListModel.addElement(result);
         }
@@ -426,7 +444,7 @@ public final class SettingsDialog extends JDialog {
         int idx = extProgList.getSelectedIndex();
         if (idx < 0) return;
         ExternalProgram existing = extProgListModel.get(idx);
-        ExternalProgram result = showExternalProgramDialog("Edit External Program",
+        ExternalProgram result = showExternalProgramDialog(get("settings.extProg.editTitle"),
                 existing.name(), existing.command(), existing.arguments());
         if (result != null) {
             extProgListModel.set(idx, result);
@@ -438,11 +456,11 @@ public final class SettingsDialog extends JDialog {
         JTextField nameField = new JTextField(initialName, 15);
         JTextField cmdField = new JTextField(initialCmd, 30);
         JTextField argsField = new JTextField(initialArgs, 30);
-        JButton browseBtn = new JButton("Browse…");
+        JButton browseBtn = new JButton(get("settings.extProg.browse"));
         browseBtn.addActionListener(e -> {
             JFileChooser fc = new JFileChooser();
             fc.setFileSelectionMode(JFileChooser.FILES_ONLY);
-            fc.setFileFilter(new FileNameExtensionFilter("Executables (*.exe, *.jar, *.bat)", "exe", "jar", "bat"));
+            fc.setFileFilter(new FileNameExtensionFilter(get("settings.extProg.executables"), "exe", "jar", "bat"));
             if (MainWindow.lastChooserDir != null) fc.setCurrentDirectory(MainWindow.lastChooserDir);
             if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
                 MainWindow.lastChooserDir = fc.getCurrentDirectory();
@@ -462,25 +480,24 @@ public final class SettingsDialog extends JDialog {
         gbc.anchor = GridBagConstraints.WEST;
 
         gbc.gridx = 0; gbc.gridy = 0;
-        panel.add(new JLabel("Name:"), gbc);
+        panel.add(new JLabel(get("settings.extProg.name")), gbc);
         gbc.gridx = 1; gbc.gridwidth = 2; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         panel.add(nameField, gbc);
 
         gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
-        panel.add(new JLabel("Command:"), gbc);
+        panel.add(new JLabel(get("settings.extProg.command")), gbc);
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         panel.add(cmdField, gbc);
         gbc.gridx = 2; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
         panel.add(browseBtn, gbc);
 
         gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
-        panel.add(new JLabel("Arguments:"), gbc);
+        panel.add(new JLabel(get("settings.extProg.arguments")), gbc);
         gbc.gridx = 1; gbc.gridwidth = 2; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         panel.add(argsField, gbc);
 
         gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 3; gbc.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(new JLabel("<html><font color='gray'>Use {file} as placeholder for the model path.<br>"
-                + "E.g.: --python script.py -- {file}</font></html>"), gbc);
+        panel.add(new JLabel("<html><font color='gray'>" + get("settings.extProg.hint") + "</font></html>"), gbc);
 
         int result = JOptionPane.showConfirmDialog(this, panel, title,
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
@@ -499,8 +516,8 @@ public final class SettingsDialog extends JDialog {
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 8));
         bar.setBorder(BorderFactory.createEmptyBorder(0, 8, 4, 8));
 
-        JButton applyBtn  = new JButton("Apply");
-        JButton cancelBtn = new JButton("Close");
+        JButton applyBtn  = new JButton(get("settings.apply"));
+        JButton cancelBtn = new JButton(get("settings.close"));
 
         applyBtn.addActionListener(e -> applyAndReload());
         cancelBtn.addActionListener(e -> dispose());
@@ -516,7 +533,7 @@ public final class SettingsDialog extends JDialog {
         JFileChooser chooser = new JFileChooser();
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         chooser.setAcceptAllFileFilterUsed(false);
-        chooser.setDialogTitle("Select Warcraft III installation folder");
+        chooser.setDialogTitle(get("settings.selectWc3Folder"));
         String current = cascPathField.getText().trim();
         if (!current.isEmpty()) {
             try { chooser.setCurrentDirectory(Path.of(current).toFile()); }
@@ -534,7 +551,7 @@ public final class SettingsDialog extends JDialog {
         JFileChooser chooser = new JFileChooser();
         chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
         chooser.setMultiSelectionEnabled(true);
-        chooser.setFileFilter(new FileNameExtensionFilter("MPQ archives (*.mpq, *.w3x, *.w3m)", "mpq", "w3x", "w3m"));
+        chooser.setFileFilter(new FileNameExtensionFilter(get("settings.mpqFilter"), "mpq", "w3x", "w3m"));
         if (MainWindow.lastChooserDir != null) chooser.setCurrentDirectory(MainWindow.lastChooserDir);
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             MainWindow.lastChooserDir = chooser.getCurrentDirectory();
@@ -574,11 +591,21 @@ public final class SettingsDialog extends JDialog {
         settings.setThumbnailAnimName(animNameField.getText());
         settings.setThumbnailQuality((ThumbnailQuality) qualityCombo.getSelectedItem());
 
+        boolean localeChanged = false;
+        LanguageEntry selectedLang = (LanguageEntry) languageCombo.getSelectedItem();
+        if (selectedLang != null) {
+            localeChanged = !selectedLang.code().equals(settings.locale());
+            settings.setLocale(selectedLang.code());
+            org.example.i18n.Messages.setLocale(java.util.Locale.forLanguageTag(selectedLang.code()));
+        }
+
         List<ExternalProgram> programs = new ArrayList<>();
         for (int i = 0; i < extProgListModel.size(); i++) programs.add(extProgListModel.get(i));
         settings.setExternalPrograms(programs);
 
         settings.save();
+
+        final boolean needsLocaleRefresh = localeChanged;
 
         // Reload GameDataSource off the EDT to avoid blocking the UI
         new SwingWorker<Void, Void>() {
@@ -587,8 +614,22 @@ public final class SettingsDialog extends JDialog {
                 return null;
             }
             @Override protected void done() {
-                JOptionPane.showMessageDialog(SettingsDialog.this,
-                        "Settings applied.", "Settings", JOptionPane.INFORMATION_MESSAGE);
+                if (needsLocaleRefresh) {
+                    // Refresh the main window with new translations
+                    Window owner = getOwner();
+                    if (owner instanceof MainWindow mw) {
+                        mw.refreshLocale();
+                    }
+                    // Dispose and reopen the settings dialog with new locale
+                    dispose();
+                    SwingUtilities.invokeLater(() -> {
+                        SettingsDialog newDialog = new SettingsDialog((JFrame) owner, settings);
+                        newDialog.setVisible(true);
+                    });
+                } else {
+                    JOptionPane.showMessageDialog(SettingsDialog.this,
+                            Messages.get("settings.applied"), Messages.get("settings.title"), JOptionPane.INFORMATION_MESSAGE);
+                }
             }
         }.execute();
     }
@@ -634,6 +675,15 @@ public final class SettingsDialog extends JDialog {
         pitchLabel.setText(pitchSlider.getValue() + "\u00B0");
         animNameField.setText(settings.thumbnailAnimName());
         qualityCombo.setSelectedItem(settings.thumbnailQuality());
+
+        // Select current language
+        String savedLocale = settings.locale();
+        for (int i = 0; i < LANGUAGES.length; i++) {
+            if (LANGUAGES[i].code().equals(savedLocale)) {
+                languageCombo.setSelectedIndex(i);
+                break;
+            }
+        }
 
         extProgListModel.clear();
         for (ExternalProgram p : settings.externalPrograms()) {

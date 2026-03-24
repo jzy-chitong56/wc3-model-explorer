@@ -1,5 +1,8 @@
 package org.example.ui;
 
+import static org.example.i18n.Messages.get;
+import static org.example.i18n.Messages.fmt;
+import org.example.i18n.Messages;
 import org.example.model.*;
 import org.example.parser.*;
 
@@ -73,22 +76,24 @@ public final class MainWindow extends JFrame {
     private final JComboBox<PortraitFilter> portraitFilterCombo = new JComboBox<>(PortraitFilter.values());
     private final JComboBox<ThumbnailSize> thumbnailSizeCombo = new JComboBox<>(ThumbnailSize.values());
     private final JComboBox<String> thumbnailTeamColorCombo = new JComboBox<>(TeamColorOptions.labels());
-    private final JButton browseButton = new JButton("Browse");
-    private final JButton scanButton = new JButton("Scan");
-    private final JButton refreshIndexButton = new JButton("Rescan");
-    private final JButton settingsButton = new JButton("Settings…");
-    private final JToggleButton favoritesToggle = new JToggleButton("\u2606 Favorites");
-    private final JButton recentButton = new JButton("Recent");
+    private final JButton browseButton = new JButton(get("main.browse"));
+    private final JButton scanButton = new JButton(get("main.scan"));
+    private final JButton settingsButton = new JButton(get("main.settings"));
+    private final JToggleButton favoritesToggle = new JToggleButton(get("main.favorites"));
+    private final JButton recentButton = new JButton(get("main.recent"));
     private final JComboBox<SortOrder> sortCombo = new JComboBox<>(SortOrder.values());
-    private final JToggleButton advancedFiltersToggle = new JToggleButton("Advanced Filters");
-    private final JPanel advancedFiltersPanel = new JPanel(new GridLayout(2, 3, 8, 6));
+    private final JToggleButton advancedFiltersToggle = new JToggleButton(get("main.advancedFilters"));
+    private final JPanel advancedFiltersPanel = new JPanel(new GridLayout(3, 3, 8, 6));
     private final JTextField animationFilterField = new JTextField();
     private final JTextField textureFilterField = new JTextField();
     private final JTextField minPolygonsField = new JTextField();
     private final JTextField maxPolygonsField = new JTextField();
     private final JTextField minSizeKbField = new JTextField();
     private final JTextField maxSizeKbField = new JTextField();
-    private final JLabel statusLabel = new JLabel("Choose a directory to start");
+    private final JLabel searchLabel = new JLabel(get("main.search"));
+    private final JLabel sortLabel = new JLabel(get("main.sort"));
+    private final JLabel teamLabel = new JLabel(get("main.team"));
+    private final JLabel statusLabel = new JLabel(get("main.chooseDirectory"));
     private final DefaultListModel<ModelAsset> listModel = new DefaultListModel<>();
     private final JList<ModelAsset> assetList = new JList<>(listModel);
     private final List<ModelAsset> allAssets = new ArrayList<>();
@@ -100,7 +105,7 @@ public final class MainWindow extends JFrame {
     private int totalThumbnails;
 
     public MainWindow() {
-        super("WC3 Model Explorer (Swing)");
+        super(get("main.title"));
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         buildUi();
         wireEvents();
@@ -130,24 +135,22 @@ public final class MainWindow extends JFrame {
         browseRow.add(rootField, BorderLayout.CENTER);
 
         JPanel browseButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        browseButtons.add(recentButton);
         browseButtons.add(browseButton);
+        browseButtons.add(recentButton);
         browseButtons.add(scanButton);
-        browseButtons.add(refreshIndexButton);
         browseButtons.add(settingsButton);
         browseRow.add(browseButtons, BorderLayout.EAST);
         topPanel.add(browseRow, BorderLayout.NORTH);
 
         JPanel filterRow = new JPanel(new BorderLayout(8, 0));
-        filterRow.add(new JLabel("Search:"), BorderLayout.WEST);
+        filterRow.add(searchLabel, BorderLayout.WEST);
         filterRow.add(searchField, BorderLayout.CENTER);
         JPanel filterControls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        filterControls.add(new JLabel("Sort:"));
+        filterControls.add(sortLabel);
         filterControls.add(sortCombo);
         filterControls.add(thumbnailSizeCombo);
-        filterControls.add(new JLabel("Team:"));
+        filterControls.add(teamLabel);
         filterControls.add(thumbnailTeamColorCombo);
-        filterControls.add(portraitFilterCombo);
         filterControls.add(favoritesToggle);
         filterControls.add(advancedFiltersToggle);
         filterRow.add(filterControls, BorderLayout.EAST);
@@ -175,7 +178,6 @@ public final class MainWindow extends JFrame {
     private void wireEvents() {
         browseButton.addActionListener(event -> chooseDirectory());
         scanButton.addActionListener(event -> startScan(false));
-        refreshIndexButton.addActionListener(event -> startScan(true));
         settingsButton.addActionListener(event -> openSettings());
         recentButton.addActionListener(event -> showRecentModelsPopup());
         favoritesToggle.addActionListener(event -> applyFilter());
@@ -261,7 +263,7 @@ public final class MainWindow extends JFrame {
         chooser.setAcceptAllFileFilterUsed(true);
         chooser.addChoosableFileFilter(
                 new javax.swing.filechooser.FileNameExtensionFilter(
-                        "WC3 Maps (*.w3x, *.w3m)", "w3x", "w3m"));
+                        get("main.wc3Maps"), "w3x", "w3m"));
         String rootText = rootField.getText().trim();
         if (!rootText.isEmpty()) {
             try {
@@ -289,7 +291,7 @@ public final class MainWindow extends JFrame {
     private void startScan(boolean forceRefresh) {
         String rootText = rootField.getText().trim();
         if (rootText.isEmpty()) {
-            statusLabel.setText("Please choose a directory or map file");
+            statusLabel.setText(get("main.pleaseChoose"));
             return;
         }
 
@@ -297,14 +299,13 @@ public final class MainWindow extends JFrame {
         try {
             root = Path.of(rootText);
         } catch (InvalidPathException ex) {
-            statusLabel.setText("Invalid path");
+            statusLabel.setText(get("main.invalidPath"));
             return;
         }
         saveCurrentRootDirectory();
 
-        statusLabel.setText("Scanning...");
+        statusLabel.setText(get("main.scanning"));
         scanButton.setEnabled(false);
-        refreshIndexButton.setEnabled(false);
         browseButton.setEnabled(false);
         listModel.clear();
         allAssets.clear();
@@ -320,7 +321,7 @@ public final class MainWindow extends JFrame {
             @Override
             protected List<ModelAsset> doInBackground() throws Exception {
                 if (isMap) {
-                    publish("Opening map archive...");
+                    publish(Messages.get("main.openingMap"));
                     // Close previous map source
                     if (currentMapSource != null) {
                         currentMapSource.close();
@@ -334,7 +335,7 @@ public final class MainWindow extends JFrame {
 
                     return ModelScanner.scan(mapSource.getTempDir(), true, (done, total) -> {
                         if (done % 5 == 0 || done == total) {
-                            publish("Parsing models... " + done + " / " + total);
+                            publish(fmt("main.parsingModels", done, total));
                         }
                     });
                 } else {
@@ -347,7 +348,7 @@ public final class MainWindow extends JFrame {
 
                     return ModelScanner.scan(root, forceRefresh, (done, total) -> {
                         if (done % 5 == 0 || done == total) {
-                            publish("Parsing models... " + done + " / " + total);
+                            publish(fmt("main.parsingModels", done, total));
                         }
                     });
                 }
@@ -361,15 +362,14 @@ public final class MainWindow extends JFrame {
             @Override
             protected void done() {
                 scanButton.setEnabled(true);
-                refreshIndexButton.setEnabled(true);
                 browseButton.setEnabled(true);
                 try {
                     allAssets.addAll(get());
                     applyFilter();
                 } catch (Exception ex) {
-                    statusLabel.setText("Scan failed");
+                    statusLabel.setText(Messages.get("main.scanFailed"));
                     showErrorDialog(MainWindow.this,
-                            "Failed to scan:\n" + ex.getMessage(), "Scan Error");
+                            fmt("main.failedToScan", ex.getMessage()), Messages.get("main.scanError"));
                 }
             }
         };
@@ -416,6 +416,51 @@ public final class MainWindow extends JFrame {
         dialog.setVisible(true);
     }
 
+    /** Re-applies all translatable text after a locale change. */
+    public void refreshLocale() {
+        setTitle(get("main.title"));
+        browseButton.setText(get("main.browse"));
+        scanButton.setText(get("main.scan"));
+        settingsButton.setText(get("main.settings"));
+        favoritesToggle.setText(get("main.favorites"));
+        recentButton.setText(get("main.recent"));
+        advancedFiltersToggle.setText(get("main.advancedFilters"));
+        searchLabel.setText(get("main.search"));
+        sortLabel.setText(get("main.sort"));
+        teamLabel.setText(get("main.team"));
+        thumbnailTeamColorCombo.setToolTipText(get("main.thumbnailTeamColor"));
+
+        // Repopulate enum combos so toString() picks up new locale
+        SortOrder selectedSort = (SortOrder) sortCombo.getSelectedItem();
+        sortCombo.removeAllItems();
+        for (SortOrder s : SortOrder.values()) sortCombo.addItem(s);
+        sortCombo.setSelectedItem(selectedSort);
+
+        PortraitFilter selectedPortrait = (PortraitFilter) portraitFilterCombo.getSelectedItem();
+        portraitFilterCombo.removeAllItems();
+        for (PortraitFilter p : PortraitFilter.values()) portraitFilterCombo.addItem(p);
+        portraitFilterCombo.setSelectedItem(selectedPortrait);
+
+        ThumbnailSize selectedSize = (ThumbnailSize) thumbnailSizeCombo.getSelectedItem();
+        thumbnailSizeCombo.removeAllItems();
+        for (ThumbnailSize t : ThumbnailSize.values()) thumbnailSizeCombo.addItem(t);
+        thumbnailSizeCombo.setSelectedItem(selectedSize);
+
+        // Repopulate team color combo
+        int selectedTeam = thumbnailTeamColorCombo.getSelectedIndex();
+        thumbnailTeamColorCombo.removeAllItems();
+        for (String label : TeamColorOptions.labels()) thumbnailTeamColorCombo.addItem(label);
+        if (selectedTeam >= 0) thumbnailTeamColorCombo.setSelectedIndex(selectedTeam);
+
+        // Rebuild advanced filters panel (has inline labels)
+        buildAdvancedFiltersPanel();
+        advancedFiltersPanel.revalidate();
+        advancedFiltersPanel.repaint();
+
+        // Refresh status bar and list
+        applyFilter();
+    }
+
     private void restoreSettings() {
         rootField.setText(settings.lastRootDirectory());
         portraitFilterCombo.setSelectedItem(settings.portraitFilter());
@@ -425,7 +470,7 @@ public final class MainWindow extends JFrame {
             return rgb != null ? rgb : TeamColorOptions.fallbackRgb(idx);
         }));
         thumbnailTeamColorCombo.setSelectedIndex(settings.thumbnailTeamColor());
-        thumbnailTeamColorCombo.setToolTipText("Thumbnail team color");
+        thumbnailTeamColorCombo.setToolTipText(get("main.thumbnailTeamColor"));
         updateCardSizing();
         // Initialise data sources in background so startup is not blocked
         new Thread(() -> GameDataSource.getInstance().refresh(settings), "DataSource-Init").start();
@@ -459,7 +504,7 @@ public final class MainWindow extends JFrame {
         boolean multiple = assets.size() > 1;
 
         // Copy path
-        javax.swing.JMenuItem copyPathItem = new javax.swing.JMenuItem(multiple ? "Copy Paths" : "Copy Path");
+        javax.swing.JMenuItem copyPathItem = new javax.swing.JMenuItem(multiple ? get("main.copyPaths") : get("main.copyPath"));
         copyPathItem.addActionListener(e -> {
             String path = assets.stream()
                     .map(a -> a.path().toAbsolutePath().toString())
@@ -469,13 +514,13 @@ public final class MainWindow extends JFrame {
         });
         popup.add(copyPathItem);
 
-        javax.swing.JMenuItem copyFileItem = new javax.swing.JMenuItem(multiple ? "Copy Files" : "Copy File");
+        javax.swing.JMenuItem copyFileItem = new javax.swing.JMenuItem(multiple ? get("main.copyFiles") : get("main.copyFile"));
         copyFileItem.addActionListener(e -> copyAssetFilesToClipboard(assets));
         popup.add(copyFileItem);
 
         // Open file location
         if (!multiple) {
-            JMenuItem openLocItem = new JMenuItem("Open File Location");
+            JMenuItem openLocItem = new JMenuItem(get("main.openFileLocation"));
             openLocItem.addActionListener(e -> {
                 try {
                     java.awt.Desktop.getDesktop().open(assets.get(0).path().getParent().toFile());
@@ -494,7 +539,7 @@ public final class MainWindow extends JFrame {
             ModelAsset singleAsset = assets.get(0);
             String absPath = singleAsset.path().toAbsolutePath().toString();
             boolean isFav = settings.isFavorite(absPath);
-            JMenuItem favItem = new JMenuItem(isFav ? "\u2605 Remove Favorite" : "\u2606 Add Favorite");
+            JMenuItem favItem = new JMenuItem(isFav ? get("main.removeFavorite") : get("main.addFavorite"));
             favItem.addActionListener(e -> {
                 settings.toggleFavorite(absPath);
                 settings.save();
@@ -512,11 +557,11 @@ public final class MainWindow extends JFrame {
             popup.addSeparator();
             if (programs.size() == 1) {
                 ExternalProgram p = programs.get(0);
-                javax.swing.JMenuItem item = new javax.swing.JMenuItem("Open in " + p.name());
+                javax.swing.JMenuItem item = new javax.swing.JMenuItem(fmt("main.openIn", p.name()));
                 item.addActionListener(e -> openInExternalProgram(p, asset));
                 popup.add(item);
             } else {
-                javax.swing.JMenu submenu = new javax.swing.JMenu("Open in…");
+                javax.swing.JMenu submenu = new javax.swing.JMenu(get("main.openInSubmenu"));
                 for (ExternalProgram p : programs) {
                     javax.swing.JMenuItem item = new javax.swing.JMenuItem(p.name());
                     item.addActionListener(e -> openInExternalProgram(p, asset));
@@ -558,7 +603,7 @@ public final class MainWindow extends JFrame {
             new ProcessBuilder(args).start();
         } catch (Exception ex) {
             showErrorDialog(this,
-                    "Failed to launch " + program.name() + ":\n" + ex.getMessage(), "Error");
+                    fmt("main.failedToLaunch", program.name(), ex.getMessage()), get("main.error"));
         }
     }
 
@@ -657,7 +702,7 @@ public final class MainWindow extends JFrame {
     private void showRecentModelsPopup() {
         List<String> recent = settings.recentModels();
         if (recent.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "No recent models yet.", "Recent Models", JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(this, get("main.noRecentModels"), get("main.recentModels"), JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         JPopupMenu popup = new JPopupMenu();
@@ -669,7 +714,7 @@ public final class MainWindow extends JFrame {
             item.addActionListener(e -> {
                 try {
                     if (!java.nio.file.Files.exists(p)) {
-                        showErrorDialog(this, "File not found:\n" + absPath, "Error");
+                        showErrorDialog(this, fmt("main.fileNotFound", absPath), get("main.error"));
                         return;
                     }
                     long size = java.nio.file.Files.size(p);
@@ -677,7 +722,7 @@ public final class MainWindow extends JFrame {
                     ModelAsset asset = new ModelAsset(p, size, meta);
                     showModelDetails(asset);
                 } catch (Exception ex) {
-                    showErrorDialog(this, "Failed to open model:\n" + ex.getMessage(), "Error");
+                    showErrorDialog(this, fmt("main.failedToOpenModel", ex.getMessage()), get("main.error"));
                 }
             });
             popup.add(item);
@@ -689,7 +734,7 @@ public final class MainWindow extends JFrame {
         stopProgressiveLoader();
         listModel.clear();
         if (filtered.isEmpty()) {
-            statusLabel.setText(String.format("Showing 0 / %d model files", allAssets.size()));
+            statusLabel.setText(fmt("main.showingModels", 0, allAssets.size()));
             return;
         }
 
@@ -774,10 +819,10 @@ public final class MainWindow extends JFrame {
     }
 
     private void updateStatusLabel() {
-        String text = String.format("Showing %d / %d model files", listModel.getSize(), allAssets.size());
+        String text = fmt("main.showingModels", listModel.getSize(), allAssets.size());
         if (totalThumbnails > 0 && pendingThumbnails > 0) {
             int done = totalThumbnails - pendingThumbnails;
-            text += String.format(" — Thumbnails: %d / %d", done, totalThumbnails);
+            text += fmt("main.thumbnailProgress", done, totalThumbnails);
         }
         statusLabel.setText(text);
     }
@@ -800,16 +845,24 @@ public final class MainWindow extends JFrame {
     }
 
     private void buildAdvancedFiltersPanel() {
-        advancedFiltersPanel.setBorder(BorderFactory.createTitledBorder("Advanced Filters"));
-        advancedFiltersPanel.add(labeledField("Animation name", animationFilterField));
-        advancedFiltersPanel.add(labeledField("Texture path", textureFilterField));
-        advancedFiltersPanel.add(labeledField("Min polygons", minPolygonsField));
-        advancedFiltersPanel.add(labeledField("Max polygons", maxPolygonsField));
-        advancedFiltersPanel.add(labeledField("Min size (KB)", minSizeKbField));
-        advancedFiltersPanel.add(labeledField("Max size (KB)", maxSizeKbField));
-        advancedFiltersPanel.setVisible(false);
-        textureFilterField.setToolTipText("Matches textures indexed from MDL and MDX content");
-        animationFilterField.setToolTipText("Matches animation names indexed from MDL and MDX content");
+        boolean wasVisible = advancedFiltersPanel.isVisible();
+        advancedFiltersPanel.removeAll();
+        advancedFiltersPanel.setBorder(BorderFactory.createTitledBorder(get("main.advancedFilters")));
+        advancedFiltersPanel.add(labeledField(get("main.animationName"), animationFilterField));
+        advancedFiltersPanel.add(labeledField(get("main.texturePath"), textureFilterField));
+        advancedFiltersPanel.add(labeledField(get("main.minPolygons"), minPolygonsField));
+        advancedFiltersPanel.add(labeledField(get("main.maxPolygons"), maxPolygonsField));
+        advancedFiltersPanel.add(labeledField(get("main.minSizeKb"), minSizeKbField));
+        advancedFiltersPanel.add(labeledField(get("main.maxSizeKb"), maxSizeKbField));
+        JPanel portraitPanel = new JPanel(new BorderLayout(4, 4));
+        portraitPanel.add(new JLabel(get("portrait.label")), BorderLayout.NORTH);
+        portraitPanel.add(portraitFilterCombo, BorderLayout.CENTER);
+        advancedFiltersPanel.add(portraitPanel);
+        advancedFiltersPanel.add(new JPanel()); // filler
+        advancedFiltersPanel.add(new JPanel()); // filler
+        advancedFiltersPanel.setVisible(wasVisible);
+        textureFilterField.setToolTipText(get("main.matchesTextures"));
+        animationFilterField.setToolTipText(get("main.matchesAnimations"));
     }
 
     private JPanel labeledField(String label, JTextField field) {
@@ -882,7 +935,7 @@ public final class MainWindow extends JFrame {
 
     private String formatPolygonCount(int polygonCount) {
         if (polygonCount < 0) {
-            return "N/A";
+            return get("main.na");
         }
         return NumberFormat.getIntegerInstance().format(polygonCount);
     }
@@ -954,12 +1007,12 @@ public final class MainWindow extends JFrame {
                 titleLabel.setText(displayName);
                 if (asset.hasParseError()) {
                     metaLabel.setForeground(new Color(200, 100, 80));
-                    metaLabel.setText("Parse error: " + asset.parseError());
+                    metaLabel.setText(fmt("main.parseError", asset.parseError()));
                 } else {
                     metaLabel.setForeground(new Color(104, 112, 124));
                     String polygonInfo = asset.metadata().hasKnownPolygonCount()
                             ? formatPolygonText(asset.metadata().polygonCount(), format)
-                            : "poly N/A";
+                            : get("main.polyNA");
                     metaLabel.setText(formatFileSize(asset.fileSizeBytes()) + " | " + polygonInfo);
                 }
 
@@ -975,23 +1028,23 @@ public final class MainWindow extends JFrame {
                 }
 
                 ModelMetadata meta = asset.metadata();
-                NumberFormat fmt = NumberFormat.getIntegerInstance();
+                NumberFormat nfmt = NumberFormat.getIntegerInstance();
                 String tooltipName = asset.fileName();
                 String mn = meta.modelName();
                 if (!mn.isEmpty()) tooltipName += " (" + mn + ")";
                 String tooltip;
                 if (asset.hasParseError()) {
                     tooltip = "<html><b>" + tooltipName + "</b><br>"
-                            + "<font color='#cc6644'>Parse error: " + escapeHtml(asset.parseError()) + "</font><br>"
-                            + "Size: " + formatFileSize(asset.fileSizeBytes()) + "<br>"
+                            + "<font color='#cc6644'>" + fmt("main.tooltip.parseError", escapeHtml(asset.parseError())) + "</font><br>"
+                            + fmt("main.tooltip.size", formatFileSize(asset.fileSizeBytes())) + "<br>"
                             + "<font color='gray'>" + asset.path() + "</font></html>";
                 } else {
                     tooltip = "<html><b>" + tooltipName + "</b><br>"
-                            + "Polygons: " + (meta.hasKnownPolygonCount() ? fmt.format(meta.polygonCount()) : "N/A") + "<br>"
-                            + "Vertices: " + fmt.format(meta.vertexCount()) + "<br>"
-                            + "Bones: " + fmt.format(meta.boneCount()) + "<br>"
-                            + "Sequences: " + fmt.format(meta.sequenceCount()) + "<br>"
-                            + "Size: " + formatFileSize(asset.fileSizeBytes()) + "<br>"
+                            + fmt("main.tooltip.polygons", meta.hasKnownPolygonCount() ? nfmt.format(meta.polygonCount()) : get("main.na")) + "<br>"
+                            + fmt("main.tooltip.vertices", nfmt.format(meta.vertexCount())) + "<br>"
+                            + fmt("main.tooltip.bones", nfmt.format(meta.boneCount())) + "<br>"
+                            + fmt("main.tooltip.sequences", nfmt.format(meta.sequenceCount())) + "<br>"
+                            + fmt("main.tooltip.size", formatFileSize(asset.fileSizeBytes())) + "<br>"
                             + "<font color='gray'>" + asset.path() + "</font></html>";
                 }
                 panel.setToolTipText(tooltip);
@@ -1001,7 +1054,7 @@ public final class MainWindow extends JFrame {
         }
 
         private String formatPolygonText(int polygonCount, NumberFormat format) {
-            return format.format(polygonCount) + " poly";
+            return format.format(polygonCount) + " " + get("main.poly");
         }
 
         private String formatFileSize(long bytes) {
@@ -1092,7 +1145,7 @@ public final class MainWindow extends JFrame {
                 g2.setFont(getFont().deriveFont(Font.PLAIN, 10f));
                 g2.setColor(LOADING_TEXT_COLOR);
                 java.awt.FontMetrics fm = g2.getFontMetrics();
-                String loadText = "Loading...";
+                String loadText = org.example.i18n.Messages.get("main.loading");
                 int tx = (w - fm.stringWidth(loadText)) / 2;
                 int ty = sy + spinnerSize + fm.getHeight() + 4;
                 g2.drawString(loadText, tx, ty);

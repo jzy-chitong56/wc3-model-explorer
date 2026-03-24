@@ -1,10 +1,12 @@
 package org.example;
 
+import org.example.i18n.Messages;
 import org.example.parser.AppSettings;
 import org.example.ui.MainWindow;
 
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
+import java.util.Locale;
 
 public final class Main {
 
@@ -15,7 +17,9 @@ public final class Main {
         Thread.setDefaultUncaughtExceptionHandler((thread, throwable) ->
             System.err.println("[UNCAUGHT " + thread.getName() + "] " + throwable)
         );
-        String savedTheme = AppSettings.loadDefault().theme();
+        AppSettings settings = AppSettings.loadDefault();
+        Messages.setLocale(Locale.forLanguageTag(settings.locale()));
+        String savedTheme = settings.theme();
         if (!savedTheme.isBlank()) {
             try { UIManager.setLookAndFeel(savedTheme); }
             catch (Exception ex) { System.err.println("[Theme] " + ex.getMessage()); }

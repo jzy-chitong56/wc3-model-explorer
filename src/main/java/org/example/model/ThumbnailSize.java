@@ -1,16 +1,18 @@
 package org.example.model;
 
-public enum ThumbnailSize {
-    SMALL("Small (128)", 128),
-    MEDIUM("Medium (192)", 192),
-    LARGE("Large (252)", 252),
-    EXTRA_LARGE("Extra Large (352)", 352);
+import org.example.i18n.Messages;
 
-    private final String label;
+public enum ThumbnailSize {
+    SMALL("thumbnail.small", 128),
+    MEDIUM("thumbnail.medium", 192),
+    LARGE("thumbnail.large", 252),
+    EXTRA_LARGE("thumbnail.extraLarge", 352);
+
+    private final String key;
     private final int cardSize;
 
-    ThumbnailSize(String label, int cardSize) {
-        this.label = label;
+    ThumbnailSize(String key, int cardSize) {
+        this.key = key;
         this.cardSize = cardSize;
     }
 
@@ -20,6 +22,6 @@ public enum ThumbnailSize {
 
     @Override
     public String toString() {
-        return label;
+        return Messages.get(key);
     }
 }

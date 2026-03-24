@@ -1,17 +1,19 @@
 package org.example.model;
 
+import org.example.i18n.Messages;
+
 import java.util.Comparator;
 
 public enum SortOrder {
-    NAME_ASC("Name (A→Z)"),
-    NAME_DESC("Name (Z→A)"),
-    SIZE_ASC("Size (smallest)"),
-    SIZE_DESC("Size (largest)");
+    NAME_ASC("sort.nameAsc"),
+    NAME_DESC("sort.nameDesc"),
+    SIZE_ASC("sort.sizeAsc"),
+    SIZE_DESC("sort.sizeDesc");
 
-    private final String label;
+    private final String key;
 
-    SortOrder(String label) {
-        this.label = label;
+    SortOrder(String key) {
+        this.key = key;
     }
 
     public Comparator<ModelAsset> comparator() {
@@ -25,6 +27,6 @@ public enum SortOrder {
 
     @Override
     public String toString() {
-        return label;
+        return Messages.get(key);
     }
 }

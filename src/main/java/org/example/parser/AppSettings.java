@@ -52,6 +52,7 @@ public final class AppSettings {
     private List<ExternalProgram> externalPrograms = new ArrayList<>();
     private List<String> recentModels = new ArrayList<>();
     private java.util.Set<String> favorites = new java.util.LinkedHashSet<>();
+    private String locale = "en";
 
     private AppSettings(Path settingsPath) {
         this.settingsPath = settingsPath;
@@ -197,6 +198,12 @@ public final class AppSettings {
 
     public java.util.Set<String> favorites() { return new java.util.LinkedHashSet<>(favorites); }
 
+    public String locale() { return locale; }
+
+    public void setLocale(String locale) {
+        this.locale = (locale == null || locale.isBlank()) ? "en" : locale;
+    }
+
     public void save() {
         Properties properties = new Properties();
         properties.setProperty(KEY_LAST_ROOT_DIRECTORY, lastRootDirectory);
@@ -220,6 +227,7 @@ public final class AppSettings {
         properties.setProperty("external.program.count", String.valueOf(externalPrograms.size()));
         properties.setProperty(KEY_RECENT_MODELS, String.join("|", recentModels));
         properties.setProperty(KEY_FAVORITES, String.join("|", favorites));
+        properties.setProperty("locale", locale);
 
         try {
             Path parent = settingsPath.getParent();
@@ -277,6 +285,7 @@ public final class AppSettings {
                     externalPrograms.add(new ExternalProgram(pName, pCmd, pArgs));
                 }
             }
+            locale = properties.getProperty("locale", "en");
         } catch (IOException ignored) {
             // Keep defaults on read failure.
         }

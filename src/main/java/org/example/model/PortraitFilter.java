@@ -1,16 +1,18 @@
 package org.example.model;
 
+import org.example.i18n.Messages;
+
 import java.util.Locale;
 
 public enum PortraitFilter {
-    MODELS_ONLY("Models only"),
-    PORTRAITS_ONLY("Portraits only"),
-    BOTH("Both");
+    MODELS_ONLY("portrait.modelsOnly"),
+    PORTRAITS_ONLY("portrait.portraitsOnly"),
+    BOTH("portrait.both");
 
-    private final String label;
+    private final String key;
 
-    PortraitFilter(String label) {
-        this.label = label;
+    PortraitFilter(String key) {
+        this.key = key;
     }
 
     public boolean allows(ModelAsset asset) {
@@ -24,7 +26,7 @@ public enum PortraitFilter {
 
     @Override
     public String toString() {
-        return label;
+        return Messages.get(key);
     }
 
     private static boolean isPortrait(ModelAsset asset) {
