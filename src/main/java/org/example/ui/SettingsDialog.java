@@ -416,7 +416,7 @@ public final class SettingsDialog extends JDialog {
     }
 
     private void addExternalProgram() {
-        ExternalProgram result = showExternalProgramDialog("Add External Program", "", "");
+        ExternalProgram result = showExternalProgramDialog("Add External Program", "", "", "");
         if (result != null) {
             extProgListModel.addElement(result);
         }
@@ -426,15 +426,18 @@ public final class SettingsDialog extends JDialog {
         int idx = extProgList.getSelectedIndex();
         if (idx < 0) return;
         ExternalProgram existing = extProgListModel.get(idx);
-        ExternalProgram result = showExternalProgramDialog("Edit External Program", existing.name(), existing.command());
+        ExternalProgram result = showExternalProgramDialog("Edit External Program",
+                existing.name(), existing.command(), existing.arguments());
         if (result != null) {
             extProgListModel.set(idx, result);
         }
     }
 
-    private ExternalProgram showExternalProgramDialog(String title, String initialName, String initialCmd) {
+    private ExternalProgram showExternalProgramDialog(String title, String initialName,
+                                                      String initialCmd, String initialArgs) {
         JTextField nameField = new JTextField(initialName, 15);
         JTextField cmdField = new JTextField(initialCmd, 30);
+        JTextField argsField = new JTextField(initialArgs, 30);
         JButton browseBtn = new JButton("Browse…");
         browseBtn.addActionListener(e -> {
             JFileChooser fc = new JFileChooser();
@@ -443,9 +446,8 @@ public final class SettingsDialog extends JDialog {
             if (MainWindow.lastChooserDir != null) fc.setCurrentDirectory(MainWindow.lastChooserDir);
             if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
                 MainWindow.lastChooserDir = fc.getCurrentDirectory();
-                String path = fc.getSelectedFile().getAbsolutePath();
-                String quoted = path.contains(" ") ? "\"" + path + "\"" : path;
-                cmdField.setText(quoted + " {file}");
+                cmdField.setText(fc.getSelectedFile().getAbsolutePath());
+                if (argsField.getText().isBlank()) argsField.setText("{file}");
                 if (nameField.getText().isBlank()) {
                     String fname = fc.getSelectedFile().getName();
                     int dot = fname.lastIndexOf('.');
@@ -471,17 +473,23 @@ public final class SettingsDialog extends JDialog {
         gbc.gridx = 2; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
         panel.add(browseBtn, gbc);
 
-        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 3; gbc.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(new JLabel("<html><font color='gray'>Use {file} as placeholder for the model path. "
-                + "E.g.: blender.exe {file}</font></html>"), gbc);
+        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
+        panel.add(new JLabel("Arguments:"), gbc);
+        gbc.gridx = 1; gbc.gridwidth = 2; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(argsField, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 3; gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(new JLabel("<html><font color='gray'>Use {file} as placeholder for the model path.<br>"
+                + "E.g.: --python script.py -- {file}</font></html>"), gbc);
 
         int result = JOptionPane.showConfirmDialog(this, panel, title,
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (result == JOptionPane.OK_OPTION) {
             String name = nameField.getText().trim();
             String cmd = cmdField.getText().trim();
+            String args = argsField.getText().trim();
             if (!name.isEmpty() && !cmd.isEmpty()) {
-                return new ExternalProgram(name, cmd);
+                return new ExternalProgram(name, cmd, args);
             }
         }
         return null;
@@ -492,7 +500,7 @@ public final class SettingsDialog extends JDialog {
         bar.setBorder(BorderFactory.createEmptyBorder(0, 8, 4, 8));
 
         JButton applyBtn  = new JButton("Apply");
-        JButton cancelBtn = new JButton("Cancel");
+        JButton cancelBtn = new JButton("Close");
 
         applyBtn.addActionListener(e -> applyAndReload());
         cancelBtn.addActionListener(e -> dispose());

@@ -532,15 +532,29 @@ public final class MainWindow extends JFrame {
         try {
             String modelPath = asset.path().toAbsolutePath().toString();
             String cmd = program.command();
-            String expanded = cmd.contains("{file}")
-                    ? cmd.replace("{file}", modelPath)
-                    : cmd + " \"" + modelPath + "\"";
-            List<String> args = parseCommand(expanded);
+            String arguments = program.arguments();
+
+            List<String> args = new ArrayList<>();
             // Auto-detect .jar files and prepend "java -jar"
-            if (!args.isEmpty() && args.get(0).toLowerCase(Locale.ROOT).endsWith(".jar")) {
-                args.add(0, "-jar");
-                args.add(0, "java");
+            if (cmd.toLowerCase(Locale.ROOT).endsWith(".jar")) {
+                args.add("java");
+                args.add("-jar");
             }
+            args.add(cmd);
+
+            if (!arguments.isBlank()) {
+                // Parse arguments, then substitute {file} in each token
+                List<String> argTokens = parseCommand(arguments);
+                for (String token : argTokens) {
+                    args.add(token.contains("{file}") ? token.replace("{file}", modelPath) : token);
+                }
+            }
+            // If {file} was never referenced, append the model path
+            if (arguments.isBlank() || !arguments.contains("{file}")) {
+                args.add(modelPath);
+            }
+
+            System.out.println("[ExternalProgram] Launching: " + args);
             new ProcessBuilder(args).start();
         } catch (Exception ex) {
             showErrorDialog(this,

@@ -215,6 +215,7 @@ public final class AppSettings {
             ExternalProgram p = externalPrograms.get(i);
             properties.setProperty("external.program." + i + ".name", p.name());
             properties.setProperty("external.program." + i + ".command", p.command());
+            properties.setProperty("external.program." + i + ".arguments", p.arguments());
         }
         properties.setProperty("external.program.count", String.valueOf(externalPrograms.size()));
         properties.setProperty(KEY_RECENT_MODELS, String.join("|", recentModels));
@@ -271,8 +272,9 @@ public final class AppSettings {
                 String pCmd = properties.getProperty("external.program." + i + ".command", "");
                 // Backwards compat: fall back to old "path" key
                 if (pCmd.isBlank()) pCmd = properties.getProperty("external.program." + i + ".path", "");
+                String pArgs = properties.getProperty("external.program." + i + ".arguments", "");
                 if (!pName.isBlank() && !pCmd.isBlank()) {
-                    externalPrograms.add(new ExternalProgram(pName, pCmd));
+                    externalPrograms.add(new ExternalProgram(pName, pCmd, pArgs));
                 }
             }
         } catch (IOException ignored) {
