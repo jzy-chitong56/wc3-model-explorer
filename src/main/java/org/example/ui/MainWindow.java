@@ -156,6 +156,7 @@ public final class MainWindow extends JFrame {
         filterRow.add(filterControls, BorderLayout.EAST);
         topPanel.add(filterRow, BorderLayout.SOUTH);
         buildAdvancedFiltersPanel();
+        advancedFiltersPanel.setVisible(false);
 
         assetList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         assetList.setCellRenderer(new AssetCellRenderer());

@@ -8,7 +8,9 @@ public enum SortOrder {
     NAME_ASC("sort.nameAsc"),
     NAME_DESC("sort.nameDesc"),
     SIZE_ASC("sort.sizeAsc"),
-    SIZE_DESC("sort.sizeDesc");
+    SIZE_DESC("sort.sizeDesc"),
+    FOLDER_ASC("sort.folderAsc"),
+    FOLDER_DESC("sort.folderDesc");
 
     private final String key;
 
@@ -22,6 +24,10 @@ public enum SortOrder {
             case NAME_DESC -> Comparator.comparing(ModelAsset::fileName, String.CASE_INSENSITIVE_ORDER).reversed();
             case SIZE_ASC -> Comparator.comparingLong(ModelAsset::fileSizeBytes);
             case SIZE_DESC -> Comparator.comparingLong(ModelAsset::fileSizeBytes).reversed();
+            case FOLDER_ASC -> Comparator.comparing(ModelAsset::parentFolder, String.CASE_INSENSITIVE_ORDER)
+                    .thenComparing(ModelAsset::fileName, String.CASE_INSENSITIVE_ORDER);
+            case FOLDER_DESC -> Comparator.comparing(ModelAsset::parentFolder, String.CASE_INSENSITIVE_ORDER).reversed()
+                    .thenComparing(ModelAsset::fileName, String.CASE_INSENSITIVE_ORDER);
         };
     }
 

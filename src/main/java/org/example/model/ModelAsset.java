@@ -21,6 +21,11 @@ public record ModelAsset(Path path, long fileSizeBytes, ModelMetadata metadata, 
         return path.getFileName().toString();
     }
 
+    public String parentFolder() {
+        Path parent = path.getParent();
+        return parent != null ? parent.toString() : "";
+    }
+
     public String fileExtension() {
         String name = fileName();
         int dot = name.lastIndexOf('.');

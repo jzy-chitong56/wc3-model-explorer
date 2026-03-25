@@ -2740,13 +2740,17 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     /** Reframe the camera to fit the given sequence's bounding volume, resetting angles. */
     public void reframeToSequence(SequenceInfo seq) {
+        // Compute animated AABB for the sequence to populate vertexAABBCenter fields
+        if (hasRenderableMesh()) {
+            computeVertexBoundsRadius(seq);
+        }
         float boundsRadius;
         if (seq != null && seq.boundsRadius() > 1f) {
             boundsRadius = seq.boundsRadius();
         } else if (seq != null && seq.hasExtent() && seq.extentRadius() > 0.001f) {
             boundsRadius = seq.extentRadius();
         } else if (hasRenderableMesh()) {
-            boundsRadius = computeVertexBoundsRadius();
+            boundsRadius = computeVertexBoundsRadius(seq);
         } else {
             boundsRadius = computePivotBoundsRadius();
         }
@@ -2775,17 +2779,91 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         return vertR > 0.1f ? vertR : 64f;
     }
 
-    /** Compute AABB from actual vertex positions, store center, return half-diagonal radius. */
+    /** Compute AABB from vertex positions (animated if possible), store center, return half-diagonal radius. */
     private float computeVertexBoundsRadius() {
+        return computeVertexBoundsRadius(null);
+    }
+
+    /**
+     * Compute AABB from vertex positions, applying skeletal animation from the given sequence
+     * (or the "Stand" sequence if seq is null). This matches the thumbnail renderer's camera framing.
+     */
+    private float computeVertexBoundsRadius(SequenceInfo seq) {
         float[] verts = mesh.vertices();
         if (verts.length < 3) return Math.max(30f, mesh.radius());
+
+        // Find a sequence for animated pose: use provided seq, or find "Stand"
+        SequenceInfo poseSeq = seq;
+        if (poseSeq == null && animData != null && animData.sequences() != null) {
+            for (SequenceInfo s : animData.sequences()) {
+                if (s.name().toLowerCase(java.util.Locale.ROOT).contains("stand")) {
+                    poseSeq = s;
+                    break;
+                }
+            }
+        }
+
+        // Compute bone matrices for animation pose
+        Map<Integer, float[]> boneMatrices = null;
+        if (poseSeq != null && animData != null && animData.bones() != null) {
+            boneMatrices = BoneAnimator.computeWorldMatrices(
+                    animData.bones(), poseSeq.start(), poseSeq.start(), poseSeq.end(), animData.globalSequences());
+        }
+
+        // Sample per-geoset alpha to skip hidden geosets (matching thumbnail renderer)
+        java.util.List<GeosetSkinData> geosets = animData != null ? animData.geosets() : java.util.List.of();
+        float[] geoAlpha = new float[geosets.size()];
+        java.util.Arrays.fill(geoAlpha, 1.0f);
+        if (poseSeq != null && animData != null) {
+            long[] globalSeqs = animData.globalSequences();
+            for (int i = 0; i < geosets.size(); i++) {
+                AnimTrack track = animData.geosetAlpha().get(i);
+                if (track != null && !track.isEmpty()) {
+                    float val = BoneAnimator.interpTrackScalar(track, poseSeq.start(),
+                            poseSeq.start(), poseSeq.end(), globalSeqs, 1f);
+                    geoAlpha[i] = Math.max(0f, Math.min(1f, val));
+                }
+            }
+        }
+
         float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY, minZ = Float.POSITIVE_INFINITY;
         float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
-        for (int i = 0; i < verts.length; i += 3) {
-            minX = Math.min(minX, verts[i]);     maxX = Math.max(maxX, verts[i]);
-            minY = Math.min(minY, verts[i + 1]); maxY = Math.max(maxY, verts[i + 1]);
-            minZ = Math.min(minZ, verts[i + 2]); maxZ = Math.max(maxZ, verts[i + 2]);
+
+        if (boneMatrices != null && !geosets.isEmpty()) {
+            // Animated AABB: transform vertices by bone matrices per geoset (same as thumbnail renderer)
+            int vertOffset = 0;
+            for (int gi = 0; gi < geosets.size(); gi++) {
+                GeosetSkinData skin = geosets.get(gi);
+                int vc = skin.vertexCount();
+                if (vc == 0) { vertOffset += vc; continue; }
+                if (geoAlpha[gi] <= 0f) { vertOffset += vc; continue; }
+
+                for (int vi = 0; vi < vc; vi++) {
+                    float vx, vy, vz;
+                    if (skin.hasSkinning()) {
+                        float[] p = transformVertex(skin, vi, boneMatrices);
+                        vx = p[0]; vy = p[1]; vz = p[2];
+                    } else {
+                        int idx = (vertOffset + vi) * 3;
+                        vx = verts[idx]; vy = verts[idx + 1]; vz = verts[idx + 2];
+                    }
+                    minX = Math.min(minX, vx); maxX = Math.max(maxX, vx);
+                    minY = Math.min(minY, vy); maxY = Math.max(maxY, vy);
+                    minZ = Math.min(minZ, vz); maxZ = Math.max(maxZ, vz);
+                }
+                vertOffset += vc;
+            }
         }
+
+        // Fallback to static vertices if no animated bounds were computed
+        if (minX > maxX) {
+            for (int i = 0; i < verts.length; i += 3) {
+                minX = Math.min(minX, verts[i]);     maxX = Math.max(maxX, verts[i]);
+                minY = Math.min(minY, verts[i + 1]); maxY = Math.max(maxY, verts[i + 1]);
+                minZ = Math.min(minZ, verts[i + 2]); maxZ = Math.max(maxZ, verts[i + 2]);
+            }
+        }
+
         vertexAABBCenterX = (minX + maxX) * 0.5f;
         vertexAABBCenterY = (minY + maxY) * 0.5f;
         vertexAABBCenterZ = (minZ + maxZ) * 0.5f;
