@@ -1,10 +1,11 @@
-package org.example.ui;
+package com.hiveworkshop.ui;
 
-import static org.example.i18n.Messages.get;
-import static org.example.i18n.Messages.fmt;
-import org.example.i18n.Messages;
-import org.example.model.*;
-import org.example.parser.*;
+import static com.hiveworkshop.i18n.Messages.get;
+import static com.hiveworkshop.i18n.Messages.fmt;
+import com.hiveworkshop.AppVersion;
+import com.hiveworkshop.i18n.Messages;
+import com.hiveworkshop.model.*;
+import com.hiveworkshop.parser.*;
 
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
@@ -40,7 +41,6 @@ import java.awt.GradientPaint;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
-import java.awt.Image;
 import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.datatransfer.DataFlavor;
@@ -105,7 +105,8 @@ public final class MainWindow extends JFrame {
     private int totalThumbnails;
 
     public MainWindow() {
-        super(get("main.title"));
+        super(fmt("main.title", AppVersion.get()));
+        setIconImage(new ImageIcon(MainWindow.class.getResource("/images/icon.png")).getImage());
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         buildUi();
         wireEvents();
@@ -419,7 +420,7 @@ public final class MainWindow extends JFrame {
 
     /** Re-applies all translatable text after a locale change. */
     public void refreshLocale() {
-        setTitle(get("main.title"));
+        setTitle(fmt("main.title", AppVersion.get()));
         browseButton.setText(get("main.browse"));
         scanButton.setText(get("main.scan"));
         settingsButton.setText(get("main.settings"));
@@ -536,13 +537,18 @@ public final class MainWindow extends JFrame {
         }
 
         // Toggle favorite
-        if (!multiple) {
-            ModelAsset singleAsset = assets.get(0);
-            String absPath = singleAsset.path().toAbsolutePath().toString();
-            boolean isFav = settings.isFavorite(absPath);
-            JMenuItem favItem = new JMenuItem(isFav ? get("main.removeFavorite") : get("main.addFavorite"));
+        {
+            boolean allFav = assets.stream().allMatch(a -> settings.isFavorite(a.path().toAbsolutePath().toString()));
+            JMenuItem favItem = new JMenuItem(allFav ? get("main.removeFavorite") : get("main.addFavorite"));
             favItem.addActionListener(e -> {
-                settings.toggleFavorite(absPath);
+                for (ModelAsset a : assets) {
+                    String absPath = a.path().toAbsolutePath().toString();
+                    if (allFav) {
+                        if (settings.isFavorite(absPath)) settings.toggleFavorite(absPath);
+                    } else {
+                        if (!settings.isFavorite(absPath)) settings.toggleFavorite(absPath);
+                    }
+                }
                 settings.save();
                 assetList.repaint();
                 if (favoritesToggle.isSelected()) applyFilter();
@@ -571,6 +577,30 @@ public final class MainWindow extends JFrame {
                 popup.add(submenu);
             }
         }
+
+        // Delete file(s)
+        popup.addSeparator();
+        JMenuItem deleteItem = new JMenuItem(multiple ? get("main.deleteFiles") : get("main.deleteFile"));
+        deleteItem.addActionListener(e -> {
+            String message = multiple
+                    ? fmt("main.deleteConfirmMultiple", assets.size())
+                    : fmt("main.deleteConfirm", assets.get(0).fileName());
+            int choice = JOptionPane.showConfirmDialog(this, message,
+                    get("main.deleteConfirmTitle"), JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (choice == JOptionPane.YES_OPTION) {
+                for (ModelAsset a : assets) {
+                    try {
+                        java.nio.file.Files.deleteIfExists(a.path());
+                        allAssets.remove(a);
+                    } catch (Exception ex) {
+                        System.err.println("Failed to delete " + a.path() + ": " + ex);
+                    }
+                }
+                applyFilter();
+            }
+        });
+        popup.add(deleteItem);
+
         popup.show(comp, x, y);
     }
 
@@ -1146,7 +1176,7 @@ public final class MainWindow extends JFrame {
                 g2.setFont(getFont().deriveFont(Font.PLAIN, 10f));
                 g2.setColor(LOADING_TEXT_COLOR);
                 java.awt.FontMetrics fm = g2.getFontMetrics();
-                String loadText = org.example.i18n.Messages.get("main.loading");
+                String loadText = Messages.get("main.loading");
                 int tx = (w - fm.stringWidth(loadText)) / 2;
                 int ty = sy + spinnerSize + fm.getHeight() + 4;
                 g2.drawString(loadText, tx, ty);

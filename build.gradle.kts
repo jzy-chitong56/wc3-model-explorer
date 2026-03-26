@@ -1,10 +1,11 @@
 plugins {
     id("java")
     id("application")
+    id("org.beryx.runtime") version "2.0.1"
 }
 
-group = "org.example"
-version = "1.0-SNAPSHOT"
+group = "com.hiveworkshop"
+version = "1.0.0"
 
 repositories {
     mavenCentral()
@@ -37,8 +38,47 @@ dependencies {
 }
 
 application {
-    mainClass = "org.example.Main"
+    mainClass = "com.hiveworkshop.Main"
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+}
+
+runtime {
+    options.addAll("--strip-debug", "--compress", "2", "--no-header-files", "--no-man-pages")
+
+    modules.addAll(
+        "java.desktop",
+        "java.datatransfer",
+        "java.logging",
+        "jdk.unsupported"
+    )
+
+    jpackage {
+        imageName = "WC3ModelExplorer"
+        installerName = "WC3ModelExplorer"
+        appVersion = project.version.toString()
+        val os = org.gradle.internal.os.OperatingSystem.current()
+        if (os.isWindows) {
+            imageOptions.addAll(listOf("--icon", "src/main/resources/images/app-icon.ico"))
+            installerOptions.addAll(listOf(
+                "--win-dir-chooser",
+                "--win-shortcut",
+                "--win-menu",
+                "--win-per-user-install"
+            ))
+            installerType = "exe"
+        } else if (os.isMacOsX) {
+            installerType = "dmg"
+        } else {
+            installerType = "deb"
+        }
+        jvmArgs.addAll(listOf("--enable-native-access=ALL-UNNAMED"))
+    }
+}
+
+tasks.processResources {
+    filesMatching("version.properties") {
+        expand("version" to project.version)
+    }
 }
 
 tasks.test {

@@ -1,7 +1,9 @@
-package org.example.ui;
+package com.hiveworkshop.ui;
 
-import org.example.model.*;
-import org.example.parser.*;
+import com.hiveworkshop.model.*;
+import com.hiveworkshop.parser.BoneAnimator;
+import com.hiveworkshop.parser.GameDataSource;
+import com.hiveworkshop.parser.ReterasModelParser;
 
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.awt.AWTGLCanvas;
@@ -74,6 +76,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile boolean       usingCameraView = false;
     private volatile CameraNode    cameraViewNode;
     private float   savedYaw, savedPitch, savedDistance, savedPanX, savedPanY;
+    private float   savedFrameCenterX, savedFrameCenterY, savedFrameCenterZ;
 
     // Render loop – latch signals that the loop has fully exited
     private volatile boolean   renderRunning = false;
@@ -1830,32 +1833,30 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     /** Snaps the camera to the model's camera node position/target. */
     public void applyCameraView(CameraNode cam) {
         if (cam == null) return;
-        // Save current orbit state
+        // Save current orbit state so we can restore it later
         savedYaw = yawDegrees; savedPitch = pitchDegrees;
         savedDistance = distance; savedPanX = panX; savedPanY = panY;
+        savedFrameCenterX = frameCenterX; savedFrameCenterY = frameCenterY; savedFrameCenterZ = frameCenterZ;
 
-        // WC3 is Z-up; our orbit camera works in Y-up after the -90° X rotation.
-        // Camera position and target are in Z-up model space.
-        float cx = cam.position()[0], cy = cam.position()[1], cz = cam.position()[2];
-        float tx = cam.targetPosition()[0], ty = cam.targetPosition()[1], tz = cam.targetPosition()[2];
-        // Direction from camera to target
-        float dx = tx - cx, dy = ty - cy, dz = tz - cz;
-        float dist = (float) Math.sqrt(dx*dx + dy*dy + dz*dz);
-        if (dist < 0.001f) dist = 100f;
+        // Set orbit center to the camera's target position (Z-up model space)
+        frameCenterX = cam.targetPosition()[0];
+        frameCenterY = cam.targetPosition()[1];
+        frameCenterZ = cam.targetPosition()[2];
 
-        // Convert to Y-up orbit angles:
-        // In Z-up: X=right, Y=forward, Z=up
-        // yaw = angle in XY plane from Y axis
-        // pitch = angle from XY plane toward Z
-        float horizLen = (float) Math.sqrt(dx*dx + dy*dy);
+        // Direction from eye to target in Z-up model space
+        float dx = cam.position()[0] - cam.targetPosition()[0];
+        float dy = cam.position()[1] - cam.targetPosition()[1];
+        float dz = cam.position()[2] - cam.targetPosition()[2];
+        float dist3d = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist3d < 0.001f) dist3d = 100f;
+
+        // Derive orbit angles from the eye-to-target direction in Z-up space
         yawDegrees = (float) Math.toDegrees(Math.atan2(-dx, -dy));
-        pitchDegrees = horizLen > 0.001f ? (float) Math.toDegrees(Math.atan2(dz, horizLen)) : 0f;
-
-        // Place the orbit center at the target, distance = camera-to-target distance
-        distance = dist * modelScale;
-        // Pan to center on the target (convert from Z-up model to Y-up view)
+        pitchDegrees = (float) Math.toDegrees(Math.asin(clamp(dz / dist3d, -1f, 1f)));
+        distance = dist3d * modelScale;
         panX = 0f;
         panY = 0f;
+
         usingCameraView = true;
         cameraViewNode = cam;
     }
@@ -1865,6 +1866,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         if (!usingCameraView) return;
         yawDegrees = savedYaw; pitchDegrees = savedPitch;
         distance = savedDistance; panX = savedPanX; panY = savedPanY;
+        frameCenterX = savedFrameCenterX; frameCenterY = savedFrameCenterY; frameCenterZ = savedFrameCenterZ;
         usingCameraView = false;
         cameraViewNode = null;
     }

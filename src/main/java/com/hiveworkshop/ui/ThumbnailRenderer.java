@@ -1,9 +1,9 @@
-package org.example.ui;
+package com.hiveworkshop.ui;
 
-import org.example.model.*;
-import org.example.parser.BoneAnimator;
-import org.example.parser.GameDataSource;
-import org.example.parser.ReterasModelParser;
+import com.hiveworkshop.model.*;
+import com.hiveworkshop.parser.BoneAnimator;
+import com.hiveworkshop.parser.GameDataSource;
+import com.hiveworkshop.parser.ReterasModelParser;
 
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.awt.AWTGLCanvas;
@@ -116,6 +116,7 @@ public final class ThumbnailRenderer {
         canvas.setSize(1, 1);
 
         hiddenFrame = new JFrame();
+        hiddenFrame.setType(java.awt.Window.Type.UTILITY);
         hiddenFrame.setUndecorated(true);
         hiddenFrame.setSize(1, 1);
         hiddenFrame.setLocation(-100, -100);

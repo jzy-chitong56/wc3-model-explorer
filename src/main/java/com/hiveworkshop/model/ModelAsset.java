@@ -1,4 +1,4 @@
-package org.example.model;
+package com.hiveworkshop.model;
 
 import java.nio.file.Path;
 

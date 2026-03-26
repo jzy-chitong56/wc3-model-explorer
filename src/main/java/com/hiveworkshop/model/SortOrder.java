@@ -1,6 +1,6 @@
-package org.example.model;
+package com.hiveworkshop.model;
 
-import org.example.i18n.Messages;
+import com.hiveworkshop.i18n.Messages;
 
 import java.util.Comparator;
 
