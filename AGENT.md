@@ -137,17 +137,6 @@ Texture lookup order:
 
 The code handles `.blp` / `.dds` fallback and prefers `.dds` when CASC is the only archive source.
 
-## Important External References
-
-These paths are referenced by the project notes and are useful when working on rendering parity:
-
-- `C:\Users\Jaccouille\Documents\Work\Java\TReterasModelStudio\`
-- `C:\Users\Jaccouille\Documents\Work\Java\TReterasModelStudio\RENDERING_PIPELINE_REFERENCE.md`
-- `C:\Users\Jaccouille\Documents\Work\Java\TReterasModelStudio\MATERIAL_MESH_RENDERING_HANDOFF.md`
-- `C:\Users\Jaccouille\Documents\Work\Java\War3AdvancedModelViewer`
-
-The current parser and parts of the rendering handoff are intentionally derived from Retera Model Studio concepts, so those references matter when adding missing rendering behavior.
-
 ## Known Gaps / Active Work
 
 - handle vertex animation
@@ -179,7 +168,6 @@ Current settings include:
 
 ## Guidance For Future Work
 
-- When changing renderer behavior, prefer validating against the Retera / previous viewer references instead of inventing new Warcraft III semantics.
 - Be careful around AWTGLCanvas lifecycle code in `GlPreviewCanvas`; shutdown handling exists to avoid native crashes during dialog close.
 - Do not assume a texture exists on disk next to the model. The code intentionally supports mixed disk, CASC, and MPQ resolution.
 - The `ThumbnailRenderer` uses a hidden UTILITY JFrame for its GL context — do not change its window type or it will appear in the taskbar.
