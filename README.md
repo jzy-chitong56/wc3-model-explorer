@@ -6,6 +6,8 @@
 
 A desktop application for browsing, previewing, and inspecting Warcraft III model files (MDX/MDL, no HD). Scan directories or map archives, view animated 3D thumbnails, and explore model internals — geometry, textures, animations, bones, and more.
 
+![Model Browser](docs/main-window.jpg)
+
 ### Supported Formats
 
 - **Model files:** MDX (versions 800–1200), MDL. Reforged HD models are not supported.
@@ -26,6 +28,8 @@ A desktop application for browsing, previewing, and inspecting Warcraft III mode
 - Drag & drop models to external applications
 
 ### 3D Model Viewer
+
+![Model Viewer](docs/model-viewer.jpg)
 
 - Orbit, pan, and zoom camera with mouse controls
 - 6 shading modes: Solid, Textured, Lit, Normals, Geoset Colors, Bone Count heat map
