@@ -4,7 +4,12 @@
   <img src="src/main/resources/images/icon.png" alt="WC3 Model Explorer" width="64" height="64">
 </p>
 
-A desktop application for browsing, previewing, and inspecting Warcraft III model files (MDX/MDL). Scan directories or map archives, view animated 3D thumbnails, and explore model internals — geometry, textures, animations, bones, and more.
+A desktop application for browsing, previewing, and inspecting Warcraft III model files (MDX/MDL, no HD). Scan directories or map archives, view animated 3D thumbnails, and explore model internals — geometry, textures, animations, bones, and more.
+
+### Supported Formats
+
+- **Model files:** MDX (versions 800–1200), MDL. Reforged HD models are not supported.
+- **Map archives:** `.w3x` / `.w3m` — both Reforged and pre-Reforged (MPQ) map formats.
 
 ## Features
 
