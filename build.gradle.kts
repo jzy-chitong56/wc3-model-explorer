@@ -53,7 +53,7 @@ runtime {
     )
 
     jpackage {
-        imageName = "WC3ModelExplorer"
+        imageName = "WC3ModelExplorer-${project.version}"
         installerName = "WC3ModelExplorer"
         appVersion = project.version.toString()
         val os = org.gradle.internal.os.OperatingSystem.current()
