@@ -4,7 +4,9 @@
   <img src="src/main/resources/images/icon.png" alt="WC3 Model Explorer" width="64" height="64">
 </p>
 
-A desktop application for browsing, previewing, and inspecting Warcraft III model files (MDX/MDL, no HD). Scan directories or map archives, view animated 3D thumbnails, and explore model internals — geometry, textures, animations, bones, and more.
+A desktop application for browsing, previewing, and inspecting Warcraft III model files (MDX/MDL, no HD).
+
+Scan directories or map archives, view 3D thumbnails, and explore model internals — geometry, textures, animations, bones.
 
 ![Model Browser](docs/main-window.jpg)
 
@@ -138,11 +140,11 @@ Creates a self-contained application image with a bundled JRE (no Java installat
 
 - [LWJGL 3](https://www.lwjgl.org/) — OpenGL rendering
 - [FlatLaf](https://www.formdev.com/flatlaf/) — modern Swing look and feel
-- [Reteras Model Studio](https://github.com/Retera/RetesModelStudio) — MDX/MDL parsing
+- [Reteras Model Studio](https://github.com/Retera/ReterasModelStudio) — MDX/MDL parsing
 - [JMPQ3](https://github.com/inwc3/JMPQ3) — MPQ archive support
-- JCASC — CASC archive support
-- blp-iio-plugin — BLP texture decoding
-- [DDS](http://maven.nikr.net/) — DDS texture support
+- [JCASC](https://github.com/DrSuperGood/JCASC) — CASC archive support
+- [Java BLP ImageIO Plugin](https://github.com/DrSuperGood/blp-iio-plugin/tree/master) — BLP texture support
+- [Java DDS ImageIO Plugin](https://github.com/GoldenGnu/) — DDS texture support
 
 ## License
 
