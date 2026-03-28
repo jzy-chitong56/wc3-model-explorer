@@ -418,6 +418,16 @@ public final class MainWindow extends JFrame {
         dialog.setVisible(true);
     }
 
+    /** Clears the thumbnail cache and re-renders all visible thumbnails. */
+    public void clearThumbnailCache() {
+        if (thumbnailRenderer != null) {
+            thumbnailRenderer.clearCache();
+        }
+        if (!allAssets.isEmpty()) {
+            applyFilter();
+        }
+    }
+
     /** Re-applies all translatable text after a locale change. */
     public void refreshLocale() {
         setTitle(fmt("main.title", AppVersion.get()));
