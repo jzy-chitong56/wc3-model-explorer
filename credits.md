@@ -25,12 +25,6 @@
 - **License**: JSON License
 - **Usage**: JSON parsing for settings and configuration
 
-### JUnit 5 (Jupiter)
-- **Version**: 5.10.0
-- **URL**: https://junit.org/junit5/
-- **License**: EPL 2.0
-- **Usage**: Unit testing framework
-
 ## Warcraft III Format Libraries
 
 ### Retera Model Studio (modelstudio-0.05.jar)
@@ -38,7 +32,7 @@
 - **License**: GPL
 - **Usage**: MDX/MDL model format parsing (MdlxModel, MdlxBone, MdlxGeoset, MdlxMaterial, MdlxSequence, MdlxTexture, MdlxRibbonEmitter, etc.)
 - **Package**: `com.hiveworkshop.rms.parsers.mdlx`
-- **Modified**: Added v1200 support (shadowIntensity in Light chunk), bounds-safe FilterMode.fromId()
+
 
 ### JCASC
 - **URL**: https://github.com/inwc3/JCASC
