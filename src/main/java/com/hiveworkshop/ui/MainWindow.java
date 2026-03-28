@@ -27,6 +27,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.JToggleButton;
 import javax.swing.ListSelectionModel;
 import javax.swing.TransferHandler;
+import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
@@ -77,6 +78,7 @@ public final class MainWindow extends JFrame {
     private final JComboBox<ThumbnailSize> thumbnailSizeCombo = new JComboBox<>(ThumbnailSize.values());
     private final JComboBox<String> thumbnailTeamColorCombo = new JComboBox<>(TeamColorOptions.labels());
     private final JButton browseButton = new JButton(get("main.browse"));
+    private final JButton stopButton = new JButton(get("main.stop"));
     private final JButton scanButton = new JButton(get("main.scan"));
     private final JButton settingsButton = new JButton(get("main.settings"));
     private final JToggleButton favoritesToggle = new JToggleButton(get("main.favorites"));
@@ -94,11 +96,14 @@ public final class MainWindow extends JFrame {
     private final JLabel sortLabel = new JLabel(get("main.sort"));
     private final JLabel teamLabel = new JLabel(get("main.team"));
     private final JLabel statusLabel = new JLabel(get("main.chooseDirectory"));
+    private final JLabel dataSourceLabel = new JLabel();
     private final DefaultListModel<ModelAsset> listModel = new DefaultListModel<>();
     private final JList<ModelAsset> assetList = new JList<>(listModel);
     private final List<ModelAsset> allAssets = new ArrayList<>();
     private final AppSettings settings = AppSettings.loadDefault();
     private Timer progressiveLoadTimer;
+    private SwingWorker<?, ?> currentScanWorker;
+    private volatile java.util.concurrent.atomic.AtomicBoolean scanCancelled;
     private ThumbnailRenderer thumbnailRenderer;
     private Timer shimmerTimer;
     private int pendingThumbnails;
@@ -135,10 +140,12 @@ public final class MainWindow extends JFrame {
         JPanel browseRow = new JPanel(new BorderLayout(8, 8));
         browseRow.add(rootField, BorderLayout.CENTER);
 
+        stopButton.setVisible(false);
         JPanel browseButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         browseButtons.add(browseButton);
         browseButtons.add(recentButton);
         browseButtons.add(scanButton);
+        browseButtons.add(stopButton);
         browseButtons.add(settingsButton);
         browseRow.add(browseButtons, BorderLayout.EAST);
         topPanel.add(browseRow, BorderLayout.NORTH);
@@ -173,13 +180,19 @@ public final class MainWindow extends JFrame {
 
         rootPanel.add(topContainer, BorderLayout.NORTH);
         rootPanel.add(listScrollPane, BorderLayout.CENTER);
-        rootPanel.add(statusLabel, BorderLayout.SOUTH);
+        JPanel bottomBar = new JPanel(new BorderLayout(8, 0));
+        bottomBar.add(statusLabel, BorderLayout.CENTER);
+        dataSourceLabel.setForeground(new Color(120, 130, 140));
+        dataSourceLabel.setFont(dataSourceLabel.getFont().deriveFont(11f));
+        bottomBar.add(dataSourceLabel, BorderLayout.EAST);
+        rootPanel.add(bottomBar, BorderLayout.SOUTH);
         setContentPane(rootPanel);
     }
 
     private void wireEvents() {
         browseButton.addActionListener(event -> chooseDirectory());
         scanButton.addActionListener(event -> startScan(false));
+        stopButton.addActionListener(event -> stopScan());
         settingsButton.addActionListener(event -> openSettings());
         recentButton.addActionListener(event -> showRecentModelsPopup());
         favoritesToggle.addActionListener(event -> applyFilter());
@@ -309,6 +322,8 @@ public final class MainWindow extends JFrame {
         statusLabel.setText(get("main.scanning"));
         scanButton.setEnabled(false);
         browseButton.setEnabled(false);
+        stopButton.setVisible(true);
+        scanCancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
         listModel.clear();
         allAssets.clear();
         stopProgressiveLoader();
@@ -318,6 +333,7 @@ public final class MainWindow extends JFrame {
         }
 
         final boolean isMap = MapArchiveSource.isMapFile(root);
+        final java.util.concurrent.atomic.AtomicBoolean cancelled = scanCancelled;
 
         SwingWorker<List<ModelAsset>, String> worker = new SwingWorker<>() {
             @Override
@@ -339,7 +355,7 @@ public final class MainWindow extends JFrame {
                         if (done % 5 == 0 || done == total) {
                             publish(fmt("main.parsingModels", done, total));
                         }
-                    });
+                    }, cancelled);
                 } else {
                     // Directory mode — clear any previous map source
                     if (currentMapSource != null) {
@@ -352,7 +368,7 @@ public final class MainWindow extends JFrame {
                         if (done % 5 == 0 || done == total) {
                             publish(fmt("main.parsingModels", done, total));
                         }
-                    });
+                    }, cancelled);
                 }
             }
 
@@ -365,9 +381,17 @@ public final class MainWindow extends JFrame {
             protected void done() {
                 scanButton.setEnabled(true);
                 browseButton.setEnabled(true);
+                stopButton.setVisible(false);
+                currentScanWorker = null;
                 try {
+                    if (isCancelled()) {
+                        statusLabel.setText(Messages.get("main.scanStopped"));
+                        return;
+                    }
                     allAssets.addAll(get());
                     applyFilter();
+                } catch (java.util.concurrent.CancellationException ex) {
+                    statusLabel.setText(Messages.get("main.scanStopped"));
                 } catch (Exception ex) {
                     statusLabel.setText(Messages.get("main.scanFailed"));
                     showErrorDialog(MainWindow.this,
@@ -375,7 +399,17 @@ public final class MainWindow extends JFrame {
                 }
             }
         };
+        currentScanWorker = worker;
         worker.execute();
+    }
+
+    private void stopScan() {
+        if (scanCancelled != null) {
+            scanCancelled.set(true);
+        }
+        if (currentScanWorker != null && !currentScanWorker.isDone()) {
+            currentScanWorker.cancel(true);
+        }
     }
 
     private void applyFilter() {
@@ -432,6 +466,7 @@ public final class MainWindow extends JFrame {
     public void refreshLocale() {
         setTitle(fmt("main.title", AppVersion.get()));
         browseButton.setText(get("main.browse"));
+        stopButton.setText(get("main.stop"));
         scanButton.setText(get("main.scan"));
         settingsButton.setText(get("main.settings"));
         favoritesToggle.setText(get("main.favorites"));
@@ -470,6 +505,7 @@ public final class MainWindow extends JFrame {
         advancedFiltersPanel.repaint();
 
         // Refresh status bar and list
+        updateDataSourceLabel();
         applyFilter();
     }
 
@@ -485,10 +521,26 @@ public final class MainWindow extends JFrame {
         thumbnailTeamColorCombo.setToolTipText(get("main.thumbnailTeamColor"));
         updateCardSizing();
         // Initialise data sources in background so startup is not blocked
-        new Thread(() -> GameDataSource.getInstance().refresh(settings), "DataSource-Init").start();
+        updateDataSourceLabel();
+        new Thread(() -> {
+            GameDataSource.getInstance().refresh(settings);
+            SwingUtilities.invokeLater(this::updateDataSourceLabel);
+        }, "DataSource-Init").start();
         String rootText = rootField.getText().trim();
         if (!rootText.isEmpty()) {
             startScan(false);
+        }
+    }
+
+    /** Updates the data source indicator label in the status bar. */
+    public void updateDataSourceLabel() {
+        int count = GameDataSource.getInstance().getSourceCount();
+        if (count > 0) {
+            dataSourceLabel.setText(fmt("main.dataSourcesLoaded", count));
+            dataSourceLabel.setForeground(new Color(60, 140, 60));
+        } else {
+            dataSourceLabel.setText(get("main.dataSourcesNone"));
+            dataSourceLabel.setForeground(new Color(160, 120, 60));
         }
     }
 

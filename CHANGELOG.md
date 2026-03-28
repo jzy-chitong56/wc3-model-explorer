@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Stop button to cancel directory scanning (useful for large root folders)
+- Data source status indicator on main window status bar and in Settings > Data Sources tab
+- Logs tab in Settings for viewing and copying application logs (for debugging/support)
+- In-memory log capture (`AppLogBuffer`) with timestamps for all `System.out`/`System.err` output
+
+### Changed
+- Browse button is now disabled during scanning to prevent conflicting actions
+- Scan cancellation uses cooperative `AtomicBoolean` flag for reliable abort of both directory walk and model parsing phases
+
 ## [1.1.0] - 2026-03-28
 
 ### Fixed

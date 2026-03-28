@@ -4,6 +4,7 @@ import static com.hiveworkshop.i18n.Messages.get;
 import static com.hiveworkshop.i18n.Messages.fmt;
 import com.hiveworkshop.i18n.Messages;
 import com.hiveworkshop.model.ReterasParsedModel;
+import com.hiveworkshop.parser.AppLogBuffer;
 import com.hiveworkshop.parser.AppSettings;
 import com.hiveworkshop.parser.GameDataSource;
 import com.hiveworkshop.parser.ReterasModelParser;
@@ -24,6 +25,7 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSlider;
 import javax.swing.JTabbedPane;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
@@ -123,6 +125,7 @@ public final class SettingsDialog extends JDialog {
         tabs.addTab(get("settings.theme"),             buildThemePanel());
         tabs.addTab(get("settings.camera"),            buildCameraPanel());
         tabs.addTab(get("settings.externalPrograms"), buildExternalProgramsPanel());
+        tabs.addTab(get("settings.logs"),              buildLogsPanel());
 
         setLayout(new BorderLayout(8, 8));
         add(tabs,            BorderLayout.CENTER);
@@ -187,7 +190,23 @@ public final class SettingsDialog extends JDialog {
         mpqButtons.add(removeMpqBtn);
         mpqPanel.add(mpqButtons, BorderLayout.SOUTH);
 
-        outer.add(cascPanel, BorderLayout.NORTH);
+        // Data source status label
+        JLabel dsStatusLabel = new JLabel();
+        int sourceCount = GameDataSource.getInstance().getSourceCount();
+        if (sourceCount > 0) {
+            dsStatusLabel.setText(fmt("settings.dataSourceStatus", sourceCount));
+            dsStatusLabel.setForeground(new Color(60, 140, 60));
+        } else {
+            dsStatusLabel.setText(get("settings.dataSourceStatusNone"));
+            dsStatusLabel.setForeground(new Color(180, 100, 40));
+        }
+        dsStatusLabel.setBorder(BorderFactory.createEmptyBorder(6, 6, 2, 6));
+
+        JPanel topSection = new JPanel(new BorderLayout(0, 4));
+        topSection.add(cascPanel, BorderLayout.CENTER);
+        topSection.add(dsStatusLabel, BorderLayout.SOUTH);
+
+        outer.add(topSection, BorderLayout.NORTH);
         outer.add(mpqPanel,  BorderLayout.CENTER);
         return outer;
     }
@@ -514,6 +533,42 @@ public final class SettingsDialog extends JDialog {
         return null;
     }
 
+    private JPanel buildLogsPanel() {
+        JPanel outer = new JPanel(new BorderLayout(8, 8));
+        outer.setBorder(BorderFactory.createEmptyBorder(12, 12, 4, 12));
+
+        JLabel desc = new JLabel("<html>" + get("settings.logs.desc") + "</html>");
+        outer.add(desc, BorderLayout.NORTH);
+
+        JTextArea logArea = new JTextArea(AppLogBuffer.getText());
+        logArea.setEditable(false);
+        logArea.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, 12));
+        logArea.setLineWrap(false);
+        JScrollPane scroll = new JScrollPane(logArea);
+        // Auto-scroll to bottom
+        logArea.setCaretPosition(logArea.getDocument().getLength());
+        outer.add(scroll, BorderLayout.CENTER);
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        JButton copyBtn = new JButton(get("settings.logs.copy"));
+        copyBtn.addActionListener(e -> {
+            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .setContents(new java.awt.datatransfer.StringSelection(logArea.getText()), null);
+            JOptionPane.showMessageDialog(this, get("settings.logs.copied"),
+                    get("settings.logs"), JOptionPane.INFORMATION_MESSAGE);
+        });
+        JButton clearBtn = new JButton(get("settings.logs.clear"));
+        clearBtn.addActionListener(e -> {
+            AppLogBuffer.clear();
+            logArea.setText("");
+        });
+        buttons.add(copyBtn);
+        buttons.add(clearBtn);
+        outer.add(buttons, BorderLayout.SOUTH);
+
+        return outer;
+    }
+
     private JPanel buildButtonBar() {
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 8));
         bar.setBorder(BorderFactory.createEmptyBorder(0, 8, 4, 8));
@@ -622,6 +677,11 @@ public final class SettingsDialog extends JDialog {
                 return null;
             }
             @Override protected void done() {
+                // Always update data source indicator on main window
+                Window owner0 = getOwner();
+                if (owner0 instanceof MainWindow mw0) {
+                    mw0.updateDataSourceLabel();
+                }
                 if (dataSourcesChanged) {
                     Window owner = getOwner();
                     if (owner instanceof MainWindow mw) {
