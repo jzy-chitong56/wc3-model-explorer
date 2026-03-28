@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - Browse button is now disabled during scanning to prevent conflicting actions
 - Scan cancellation uses cooperative `AtomicBoolean` flag for reliable abort of both directory walk and model parsing phases
+- Moved 3D background color setting from Theme tab to Camera tab, now updates the camera preview live
 
 ## [1.1.0] - 2026-03-28
 

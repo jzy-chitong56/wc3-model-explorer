@@ -236,30 +236,8 @@ public final class SettingsDialog extends JDialog {
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
         panel.add(languageCombo, gbc);
 
-        // Background color row
-        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 1; gbc.weightx = 0;
-        gbc.fill = GridBagConstraints.NONE;
-        panel.add(new JLabel(get("settings.bgColor")), gbc);
-
-        gbc.gridx = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
-        bgColorButton.setPreferredSize(new Dimension(80, 26));
-        bgColorButton.setBackground(bgColor);
-        bgColorButton.setOpaque(true);
-        bgColorButton.addActionListener(e -> {
-            Color chosen = JColorChooser.showDialog(this, get("settings.chooseBgColor"), bgColor);
-            if (chosen != null) {
-                bgColor = chosen;
-                bgColorButton.setBackground(bgColor);
-                if (cameraPreview != null) {
-                    cameraPreview.setBackgroundColor(String.format("%02X%02X%02X",
-                            bgColor.getRed(), bgColor.getGreen(), bgColor.getBlue()));
-                }
-            }
-        });
-        panel.add(bgColorButton, gbc);
-
         // Push everything to the top
-        gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 2; gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH;
+        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2; gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH;
         panel.add(new JPanel(), gbc);
 
         return panel;
@@ -342,6 +320,28 @@ public final class SettingsDialog extends JDialog {
         gbc.gridx = 0; gbc.gridy = 6; gbc.gridwidth = 3; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         controls.add(new JLabel("<html><font color='gray'>" + get("settings.thumbnailQualityHint") + "</font></html>"), gbc);
+
+        // Background color
+        gbc.gridx = 0; gbc.gridy = 7; gbc.gridwidth = 1; gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        controls.add(new JLabel(get("settings.bgColor")), gbc);
+
+        gbc.gridx = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
+        bgColorButton.setPreferredSize(new Dimension(80, 26));
+        bgColorButton.setBackground(bgColor);
+        bgColorButton.setOpaque(true);
+        bgColorButton.addActionListener(e -> {
+            Color chosen = JColorChooser.showDialog(this, get("settings.chooseBgColor"), bgColor);
+            if (chosen != null) {
+                bgColor = chosen;
+                bgColorButton.setBackground(bgColor);
+                if (cameraPreview != null) {
+                    cameraPreview.setBackgroundColor(String.format("%02X%02X%02X",
+                            bgColor.getRed(), bgColor.getGreen(), bgColor.getBlue()));
+                }
+            }
+        });
+        controls.add(bgColorButton, gbc);
 
         outer.add(controls, BorderLayout.NORTH);
 
