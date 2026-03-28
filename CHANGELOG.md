@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.2.0] - 2026-03-29
 
 ### Added
 - Stop button to cancel directory scanning (useful for large root folders)
