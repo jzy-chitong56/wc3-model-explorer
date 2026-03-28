@@ -783,12 +783,21 @@ public final class ThumbnailRenderer {
         if (base == null) return loadTeamColorSwatchTexture(tcIdx, modelDir, rootDir);
         int[] tc = resolveTeamColorRgb(tcIdx, modelDir, rootDir);
         int w = base.getWidth(), h = base.getHeight();
+        boolean rawRaster = base.getColorModel() instanceof java.awt.image.ComponentColorModel;
         BufferedImage result = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
-                int argb = base.getRGB(x, y);
-                float a = ((argb >> 24) & 0xFF) / 255f;
-                int r = (argb >> 16) & 0xFF, g = (argb >> 8) & 0xFF, b = argb & 0xFF;
+                int r, g, b;
+                float a;
+                if (rawRaster) {
+                    int[] pixel = base.getRaster().getPixel(x, y, (int[]) null);
+                    r = pixel[0]; g = pixel[1]; b = pixel[2];
+                    a = (pixel.length > 3 ? pixel[3] : 255) / 255f;
+                } else {
+                    int argb = base.getRGB(x, y);
+                    a = ((argb >> 24) & 0xFF) / 255f;
+                    r = (argb >> 16) & 0xFF; g = (argb >> 8) & 0xFF; b = argb & 0xFF;
+                }
                 int cr = Math.round(a * r + (1f - a) * tc[0]);
                 int cg = Math.round(a * g + (1f - a) * tc[1]);
                 int cb = Math.round(a * b + (1f - a) * tc[2]);

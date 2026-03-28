@@ -2276,14 +2276,23 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         }
         int[] tc = resolveTeamColorRgb(tcIdx);
         int w = base.getWidth(), h = base.getHeight();
+        boolean rawRaster = base.getColorModel() instanceof java.awt.image.ComponentColorModel;
         BufferedImage result = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
-                int argb = base.getRGB(x, y);
-                float a = ((argb >> 24) & 0xFF) / 255f;
-                int r = (argb >> 16) & 0xFF;
-                int g = (argb >>  8) & 0xFF;
-                int b =  argb        & 0xFF;
+                int r, g, b;
+                float a;
+                if (rawRaster) {
+                    int[] pixel = base.getRaster().getPixel(x, y, (int[]) null);
+                    r = pixel[0]; g = pixel[1]; b = pixel[2];
+                    a = (pixel.length > 3 ? pixel[3] : 255) / 255f;
+                } else {
+                    int argb = base.getRGB(x, y);
+                    a = ((argb >> 24) & 0xFF) / 255f;
+                    r = (argb >> 16) & 0xFF;
+                    g = (argb >> 8) & 0xFF;
+                    b = argb & 0xFF;
+                }
                 // Composite: TC shows through transparent areas, base shows in opaque areas
                 int cr = Math.round(a * r + (1f - a) * tc[0]);
                 int cg = Math.round(a * g + (1f - a) * tc[1]);
@@ -2365,14 +2374,26 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     static int uploadTexture(BufferedImage img) {
         int w = img.getWidth(), h = img.getHeight();
         ByteBuffer buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder());
+        // For ComponentColorModel images (e.g. JPEG BLP with CS_LINEAR_RGB), read raw
+        // raster data to avoid an unwanted linear→sRGB conversion in getRGB() that
+        // brightens the image. IndexColorModel images still need getRGB() for palette lookup.
+        boolean rawRaster = img.getColorModel() instanceof java.awt.image.ComponentColorModel;
         // Flip Y: OpenGL expects rows bottom-to-top; BufferedImage/BLP stores top-to-bottom
         for (int y = h - 1; y >= 0; y--) {
             for (int x = 0; x < w; x++) {
-                int rgb = img.getRGB(x, y);
-                buf.put((byte)((rgb >> 16) & 0xFF));
-                buf.put((byte)((rgb >>  8) & 0xFF));
-                buf.put((byte)( rgb        & 0xFF));
-                buf.put((byte)((rgb >> 24) & 0xFF));
+                if (rawRaster) {
+                    int[] pixel = img.getRaster().getPixel(x, y, (int[]) null);
+                    buf.put((byte) pixel[0]);
+                    buf.put((byte) pixel[1]);
+                    buf.put((byte) pixel[2]);
+                    buf.put((byte) (pixel.length > 3 ? pixel[3] : 255));
+                } else {
+                    int rgb = img.getRGB(x, y);
+                    buf.put((byte) ((rgb >> 16) & 0xFF));
+                    buf.put((byte) ((rgb >> 8) & 0xFF));
+                    buf.put((byte) (rgb & 0xFF));
+                    buf.put((byte) ((rgb >> 24) & 0xFF));
+                }
             }
         }
         buf.flip();
