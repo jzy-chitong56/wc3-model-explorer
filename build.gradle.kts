@@ -49,6 +49,7 @@ runtime {
         "java.desktop",
         "java.datatransfer",
         "java.logging",
+        "java.naming",
         "jdk.unsupported"
     )
 

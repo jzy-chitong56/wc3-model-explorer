@@ -101,6 +101,8 @@ public final class MainWindow extends JFrame {
     private final JList<ModelAsset> assetList = new JList<>(listModel);
     private final List<ModelAsset> allAssets = new ArrayList<>();
     private final AppSettings settings = AppSettings.loadDefault();
+    private int baseCardWidth;
+    private int baseCardHeight;
     private Timer progressiveLoadTimer;
     private SwingWorker<?, ?> currentScanWorker;
     private volatile java.util.concurrent.atomic.AtomicBoolean scanCancelled;
@@ -173,6 +175,7 @@ public final class MainWindow extends JFrame {
         assetList.setDragEnabled(true);
         assetList.setTransferHandler(new AssetFileTransferHandler());
         JScrollPane listScrollPane = new JScrollPane(assetList);
+        listScrollPane.getViewport().addChangeListener(e -> adjustCardWidth(listScrollPane));
 
         JPanel topContainer = new JPanel(new BorderLayout(0, 8));
         topContainer.add(topPanel, BorderLayout.NORTH);
@@ -933,8 +936,21 @@ public final class MainWindow extends JFrame {
             selectedSize = ThumbnailSize.MEDIUM;
         }
         int cardSize = selectedSize.cardSize();
-        assetList.setFixedCellWidth(cardSize + 36);
-        assetList.setFixedCellHeight(cardSize + 78);
+        baseCardWidth = cardSize + 36;
+        baseCardHeight = cardSize + 78;
+        assetList.setFixedCellWidth(baseCardWidth);
+        assetList.setFixedCellHeight(baseCardHeight);
+    }
+
+    private void adjustCardWidth(JScrollPane scrollPane) {
+        if (baseCardWidth <= 0) return;
+        int viewportWidth = scrollPane.getViewport().getWidth();
+        if (viewportWidth <= 0) return;
+        int columns = Math.max(1, viewportWidth / baseCardWidth);
+        int adjustedWidth = viewportWidth / columns;
+        if (adjustedWidth != assetList.getFixedCellWidth()) {
+            assetList.setFixedCellWidth(adjustedWidth);
+        }
     }
 
     private void buildAdvancedFiltersPanel() {
