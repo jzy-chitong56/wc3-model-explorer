@@ -1590,7 +1590,15 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         int meshVertOffset = 0;
         for (GeosetSkinData skin : animData.geosets()) {
             int vc = skin.vertexCount(); if (vc == 0) continue;
-            if (skin.hasSkinning()) {
+            if (skin.hasHdSkinning()) {
+                for (int vi = 0; vi < vc; vi++) {
+                    float[] p = transformVertexHd(skin, vi, worldMap);
+                    int base = (meshVertOffset + vi) * 3;
+                    animatedVertices[base] = p[0]; animatedVertices[base+1] = p[1]; animatedVertices[base+2] = p[2];
+                    float[] n = transformNormalHd(skin, vi, meshVertOffset, bindNormals, worldMap);
+                    animatedNormals[base] = n[0]; animatedNormals[base+1] = n[1]; animatedNormals[base+2] = n[2];
+                }
+            } else if (skin.hasSkinning()) {
                 for (int vi = 0; vi < vc; vi++) {
                     float[] p = transformVertex(skin, vi, worldMap);
                     int base = (meshVertOffset + vi) * 3;
@@ -1730,6 +1738,57 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         float ry = avg[1]*nx + avg[5]*ny + avg[9]*nz;
         float rz = avg[2]*nx + avg[6]*ny + avg[10]*nz;
         // Normalize
+        float len = (float)Math.sqrt(rx*rx + ry*ry + rz*rz);
+        if (len > 0.0001f) { rx /= len; ry /= len; rz /= len; }
+        return new float[]{rx, ry, rz};
+    }
+
+    /** HD skinning: weighted blend of up to 4 bone matrices per vertex. */
+    static float[] transformVertexHd(GeosetSkinData skin, int vi, Map<Integer, float[]> wm) {
+        float bx = skin.bindVertices()[vi*3], by = skin.bindVertices()[vi*3+1], bz = skin.bindVertices()[vi*3+2];
+        int[] boneIds = skin.hdBoneIds();
+        float[] weights = skin.hdWeights();
+        int base = vi * 4;
+        float rx = 0, ry = 0, rz = 0;
+        float totalWeight = 0;
+        for (int bi = 0; bi < 4; bi++) {
+            float w = weights[base + bi];
+            if (w <= 0f) continue;
+            float[] m = wm.get(boneIds[base + bi]);
+            if (m == null) continue;
+            rx += w * (m[0]*bx + m[4]*by + m[8]*bz  + m[12]);
+            ry += w * (m[1]*bx + m[5]*by + m[9]*bz  + m[13]);
+            rz += w * (m[2]*bx + m[6]*by + m[10]*bz + m[14]);
+            totalWeight += w;
+        }
+        if (totalWeight <= 0f) return new float[]{bx, by, bz};
+        float inv = 1f / totalWeight;
+        return new float[]{rx * inv, ry * inv, rz * inv};
+    }
+
+    /** HD skinning: weighted blend of normals using upper-left 3x3 of bone matrices. */
+    static float[] transformNormalHd(GeosetSkinData skin, int vi, int meshVertOffset,
+                                     float[] bindNormals, Map<Integer, float[]> wm) {
+        int nBase = (meshVertOffset + vi) * 3;
+        float nx = bindNormals[nBase], ny = bindNormals[nBase+1], nz = bindNormals[nBase+2];
+        int[] boneIds = skin.hdBoneIds();
+        float[] weights = skin.hdWeights();
+        int base = vi * 4;
+        float rx = 0, ry = 0, rz = 0;
+        float totalWeight = 0;
+        for (int bi = 0; bi < 4; bi++) {
+            float w = weights[base + bi];
+            if (w <= 0f) continue;
+            float[] m = wm.get(boneIds[base + bi]);
+            if (m == null) continue;
+            rx += w * (m[0]*nx + m[4]*ny + m[8]*nz);
+            ry += w * (m[1]*nx + m[5]*ny + m[9]*nz);
+            rz += w * (m[2]*nx + m[6]*ny + m[10]*nz);
+            totalWeight += w;
+        }
+        if (totalWeight <= 0f) return new float[]{nx, ny, nz};
+        float inv = 1f / totalWeight;
+        rx *= inv; ry *= inv; rz *= inv;
         float len = (float)Math.sqrt(rx*rx + ry*ry + rz*rz);
         if (len > 0.0001f) { rx /= len; ry /= len; rz /= len; }
         return new float[]{rx, ry, rz};
@@ -2172,7 +2231,21 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices, GL_STATIC_DRAW);
 
                 // Per-vertex bone color VBOs (location=3)
-                if (skin.hasSkinning()) {
+                if (skin.hasHdSkinning()) {
+                    float[] countColors = new float[vc * 3];
+                    float[] weights = skin.hdWeights();
+                    for (int vi = 0; vi < vc; vi++) {
+                        int cnt = 0;
+                        for (int bi = 0; bi < 4; bi++) {
+                            if (weights[vi * 4 + bi] > 0f) cnt++;
+                        }
+                        float[] c = boneCountColor(cnt);
+                        countColors[vi * 3] = c[0]; countColors[vi * 3 + 1] = c[1]; countColors[vi * 3 + 2] = c[2];
+                    }
+                    geoBoneCountVbo[gi] = glGenBuffers();
+                    glBindBuffer(GL_ARRAY_BUFFER, geoBoneCountVbo[gi]);
+                    glBufferData(GL_ARRAY_BUFFER, countColors, GL_STATIC_DRAW);
+                } else if (skin.hasSkinning()) {
                     int[] vg = skin.vertexGroup();
                     int[][] groups = skin.groupBoneObjectIds();
 
