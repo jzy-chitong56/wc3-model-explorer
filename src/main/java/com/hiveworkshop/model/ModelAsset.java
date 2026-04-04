@@ -1,15 +1,23 @@
 package com.hiveworkshop.model;
 
 import java.nio.file.Path;
+import java.util.List;
 
-public record ModelAsset(Path path, long fileSizeBytes, ModelMetadata metadata, String parseError) {
+public record ModelAsset(Path path, long fileSizeBytes, ModelMetadata metadata, String parseError, List<String> tags) {
     public ModelAsset(Path path, long fileSizeBytes, ModelMetadata metadata) {
-        this(path, fileSizeBytes, metadata, null);
+        this(path, fileSizeBytes, metadata, null, List.of());
+    }
+
+    public ModelAsset(Path path, long fileSizeBytes, ModelMetadata metadata, String parseError) {
+        this(path, fileSizeBytes, metadata, parseError, List.of());
     }
 
     public ModelAsset {
         if (metadata == null) {
             metadata = ModelMetadata.EMPTY;
+        }
+        if (tags == null) {
+            tags = List.of();
         }
     }
 

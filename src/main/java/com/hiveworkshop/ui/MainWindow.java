@@ -19,6 +19,7 @@ import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTabbedPane;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JTextField;
@@ -68,6 +69,16 @@ import java.util.Locale;
 import java.util.stream.Collectors;
 
 public final class MainWindow extends JFrame {
+    private enum TagState {
+        NEUTRAL, INCLUDE, EXCLUDE;
+        TagState next() {
+            return switch (this) {
+                case NEUTRAL -> INCLUDE;
+                case INCLUDE -> EXCLUDE;
+                case EXCLUDE -> NEUTRAL;
+            };
+        }
+    }
     /** Shared last-used directory for all file choosers in the app. */
     static java.io.File lastChooserDir;
     private MapArchiveSource currentMapSource;
@@ -85,11 +96,15 @@ public final class MainWindow extends JFrame {
     private final JButton recentButton = new JButton(get("main.recent"));
     private final JComboBox<SortOrder> sortCombo = new JComboBox<>(SortOrder.values());
     private final JToggleButton advancedFiltersToggle = new JToggleButton(get("main.advancedFilters"));
-    private final JPanel advancedFiltersPanel = new JPanel(new GridLayout(3, 3, 8, 6));
+    private final JPanel advancedFiltersPanel = new JPanel(new BorderLayout());
+    private final JTabbedPane advancedFiltersTabs = new JTabbedPane(JTabbedPane.TOP);
+    private final JPanel filtersGridPanel = new JPanel(new GridLayout(0, 4, 8, 6));
     private final JTextField animationFilterField = new JTextField();
     private final JTextField textureFilterField = new JTextField();
     private final JTextField minPolygonsField = new JTextField();
     private final JTextField maxPolygonsField = new JTextField();
+    private final JPanel tagButtonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+    private final java.util.Map<String, TagState> tagStates = new java.util.LinkedHashMap<>();
     private final JTextField minSizeKbField = new JTextField();
     private final JTextField maxSizeKbField = new JTextField();
     private final JLabel searchLabel = new JLabel(get("main.search"));
@@ -337,6 +352,7 @@ public final class MainWindow extends JFrame {
 
         final boolean isMap = MapArchiveSource.isMapFile(root);
         final java.util.concurrent.atomic.AtomicBoolean cancelled = scanCancelled;
+        final boolean parseTags = settings.tagsEnabled();
 
         SwingWorker<List<ModelAsset>, String> worker = new SwingWorker<>() {
             @Override
@@ -358,7 +374,7 @@ public final class MainWindow extends JFrame {
                         if (done % 5 == 0 || done == total) {
                             publish(fmt("main.parsingModels", done, total));
                         }
-                    }, cancelled);
+                    }, cancelled, parseTags);
                 } else {
                     // Directory mode — clear any previous map source
                     if (currentMapSource != null) {
@@ -371,7 +387,7 @@ public final class MainWindow extends JFrame {
                         if (done % 5 == 0 || done == total) {
                             publish(fmt("main.parsingModels", done, total));
                         }
-                    }, cancelled);
+                    }, cancelled, parseTags);
                 }
             }
 
@@ -392,6 +408,7 @@ public final class MainWindow extends JFrame {
                         return;
                     }
                     allAssets.addAll(get());
+                    rebuildTagButtons();
                     applyFilter();
                 } catch (java.util.concurrent.CancellationException ex) {
                     statusLabel.setText(Messages.get("main.scanStopped"));
@@ -437,6 +454,7 @@ public final class MainWindow extends JFrame {
                 .filter(portraitFilter::allows)
                 .filter(asset -> asset.metadata().hasAnimationContaining(animationNeedle))
                 .filter(asset -> asset.metadata().hasTextureContaining(textureNeedle))
+                .filter(this::matchesTagFilter)
                 .filter(asset -> polygonRangeMatches(asset, minPolygons, maxPolygons))
                 .filter(asset -> minSizeBytes == null || asset.fileSizeBytes() >= minSizeBytes)
                 .filter(asset -> maxSizeBytes == null || asset.fileSizeBytes() <= maxSizeBytes)
@@ -619,6 +637,105 @@ public final class MainWindow extends JFrame {
                 if (favoritesToggle.isSelected()) applyFilter();
             });
             popup.add(favItem);
+            popup.addSeparator();
+        }
+
+        // Tags submenu — add/remove tags on selected models
+        {
+            javax.swing.JMenu tagsMenu = new javax.swing.JMenu(get("main.tagsMenu"));
+
+            // Collect effective tags across all selected models
+            java.util.Set<String> unionTags = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            for (ModelAsset a : assets) {
+                unionTags.addAll(getEffectiveTags(a));
+            }
+
+            // "Add Tag" submenu: all known tags not already on ALL selected models + "New Tag..."
+            javax.swing.JMenu addMenu = new javax.swing.JMenu(get("main.addTag"));
+            java.util.Set<String> allKnownTags = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            for (ModelAsset a : allAssets) {
+                allKnownTags.addAll(getEffectiveTags(a));
+            }
+            allKnownTags.addAll(settings.allCustomTagNames());
+
+            // Collect tags present on ALL selected models
+            java.util.Set<String> intersectionTags = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            intersectionTags.addAll(getEffectiveTags(assets.get(0)));
+            for (int i = 1; i < assets.size(); i++) {
+                intersectionTags.retainAll(getEffectiveTags(assets.get(i)));
+            }
+
+            // Show tags not already on all selected
+            for (String tag : allKnownTags) {
+                if (!intersectionTags.contains(tag)) {
+                    JMenuItem item = new JMenuItem(tag);
+                    item.addActionListener(e -> {
+                        for (ModelAsset a : assets) {
+                            List<String> effective = getEffectiveTags(a);
+                            if (effective.stream().noneMatch(tag::equalsIgnoreCase)) {
+                                settings.addCustomTag(a.path().toAbsolutePath().toString(), tag);
+                            }
+                        }
+                        settings.save();
+                        rebuildTagButtons();
+                        applyFilter();
+                    });
+                    addMenu.add(item);
+                }
+            }
+            if (addMenu.getItemCount() > 0) addMenu.addSeparator();
+            JMenuItem newTagItem = new JMenuItem(get("main.newTag"));
+            newTagItem.addActionListener(e -> {
+                String newTag = JOptionPane.showInputDialog(this, get("main.newTagPrompt"), get("main.newTagTitle"),
+                        JOptionPane.PLAIN_MESSAGE);
+                if (newTag != null && !newTag.trim().isEmpty()) {
+                    newTag = newTag.trim();
+                    for (ModelAsset a : assets) {
+                        settings.addCustomTag(a.path().toAbsolutePath().toString(), newTag);
+                    }
+                    settings.save();
+                    rebuildTagButtons();
+                    applyFilter();
+                }
+            });
+            addMenu.add(newTagItem);
+            tagsMenu.add(addMenu);
+
+            // "Remove Tag" submenu: tags on the selected models
+            if (!unionTags.isEmpty()) {
+                javax.swing.JMenu removeMenu = new javax.swing.JMenu(get("main.removeTag"));
+                for (String tag : unionTags) {
+                    JMenuItem item = new JMenuItem(tag);
+                    item.addActionListener(e -> {
+                        for (ModelAsset a : assets) {
+                            settings.removeCustomTag(a.path().toAbsolutePath().toString(), tag);
+                        }
+                        settings.save();
+                        rebuildTagButtons();
+                        applyFilter();
+                    });
+                    removeMenu.add(item);
+                }
+                tagsMenu.add(removeMenu);
+            }
+
+            // "Hide Tag" submenu (global hide)
+            if (!unionTags.isEmpty()) {
+                javax.swing.JMenu hideMenu = new javax.swing.JMenu(get("settings.tags.removeTag"));
+                for (String tag : unionTags) {
+                    JMenuItem item = new JMenuItem(tag);
+                    item.addActionListener(e -> {
+                        settings.addRemovedTag(tag);
+                        settings.save();
+                        rebuildTagButtons();
+                        applyFilter();
+                    });
+                    hideMenu.add(item);
+                }
+                tagsMenu.add(hideMenu);
+            }
+
+            popup.add(tagsMenu);
             popup.addSeparator();
         }
 
@@ -956,19 +1073,52 @@ public final class MainWindow extends JFrame {
     private void buildAdvancedFiltersPanel() {
         boolean wasVisible = advancedFiltersPanel.isVisible();
         advancedFiltersPanel.removeAll();
-        advancedFiltersPanel.setBorder(BorderFactory.createTitledBorder(get("main.advancedFilters")));
-        advancedFiltersPanel.add(labeledField(get("main.animationName"), animationFilterField));
-        advancedFiltersPanel.add(labeledField(get("main.texturePath"), textureFilterField));
-        advancedFiltersPanel.add(labeledField(get("main.minPolygons"), minPolygonsField));
-        advancedFiltersPanel.add(labeledField(get("main.maxPolygons"), maxPolygonsField));
-        advancedFiltersPanel.add(labeledField(get("main.minSizeKb"), minSizeKbField));
-        advancedFiltersPanel.add(labeledField(get("main.maxSizeKb"), maxSizeKbField));
+
+        filtersGridPanel.removeAll();
+        filtersGridPanel.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
         JPanel portraitPanel = new JPanel(new BorderLayout(4, 4));
         portraitPanel.add(new JLabel(get("portrait.label")), BorderLayout.NORTH);
         portraitPanel.add(portraitFilterCombo, BorderLayout.CENTER);
-        advancedFiltersPanel.add(portraitPanel);
-        advancedFiltersPanel.add(new JPanel()); // filler
-        advancedFiltersPanel.add(new JPanel()); // filler
+        // Row 1: animation, texture, portrait
+        filtersGridPanel.add(labeledField(get("main.animationName"), animationFilterField));
+        filtersGridPanel.add(labeledField(get("main.texturePath"), textureFilterField));
+        filtersGridPanel.add(portraitPanel);
+        filtersGridPanel.add(new JPanel()); // filler
+        // Row 2: polygon range & size range
+        filtersGridPanel.add(labeledField(get("main.minPolygons"), minPolygonsField));
+        filtersGridPanel.add(labeledField(get("main.maxPolygons"), maxPolygonsField));
+        filtersGridPanel.add(labeledField(get("main.minSizeKb"), minSizeKbField));
+        filtersGridPanel.add(labeledField(get("main.maxSizeKb"), maxSizeKbField));
+        // Wrap grid so it only takes ~half the width
+        JPanel filtersWrapper = new JPanel(new GridLayout(1, 2));
+        filtersWrapper.add(filtersGridPanel);
+        filtersWrapper.add(new JPanel()); // right-side spacer
+
+        // Tag buttons inside a scroll pane that wraps with viewport width
+        tagButtonsPanel.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
+        tagButtonsPanel.setToolTipText(get("main.matchesTags"));
+        JScrollPane tagScroll = new JScrollPane(tagButtonsPanel,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        tagScroll.setBorder(null);
+        // Make FlowLayout wrap to viewport width
+        tagScroll.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                int w = tagScroll.getViewport().getWidth();
+                if (w > 0) {
+                    tagButtonsPanel.setPreferredSize(new Dimension(w,
+                            tagButtonsPanel.getPreferredSize().height));
+                    tagButtonsPanel.revalidate();
+                }
+            }
+        });
+
+        advancedFiltersTabs.removeAll();
+        advancedFiltersTabs.addTab(get("main.advancedFilters"), filtersWrapper);
+        advancedFiltersTabs.addTab(get("main.tagFilter"), tagScroll);
+        advancedFiltersPanel.add(advancedFiltersTabs, BorderLayout.CENTER);
+
         advancedFiltersPanel.setVisible(wasVisible);
         textureFilterField.setToolTipText(get("main.matchesTextures"));
         animationFilterField.setToolTipText(get("main.matchesAnimations"));
@@ -1029,6 +1179,100 @@ public final class MainWindow extends JFrame {
         }
     }
 
+    /** Rebuilds the tag filter buttons from all scanned assets. */
+    private void rebuildTagButtons() {
+        // Collect all unique visible tags (readme + custom)
+        java.util.TreeSet<String> allTags = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        for (ModelAsset asset : allAssets) {
+            allTags.addAll(getEffectiveTags(asset));
+        }
+
+        // Preserve existing states, remove stale ones
+        tagStates.keySet().retainAll(allTags);
+        for (String tag : allTags) {
+            tagStates.putIfAbsent(tag, TagState.NEUTRAL);
+        }
+
+        tagButtonsPanel.removeAll();
+        for (String tag : allTags) {
+            JButton btn = new JButton(formatTagButtonLabel(tag, tagStates.get(tag)));
+            btn.setFont(btn.getFont().deriveFont(Font.PLAIN, 11f));
+            btn.setFocusPainted(false);
+            btn.setMargin(new java.awt.Insets(2, 6, 2, 6));
+            styleTagButton(btn, tagStates.get(tag));
+            btn.addActionListener(e -> {
+                TagState next = tagStates.get(tag).next();
+                tagStates.put(tag, next);
+                btn.setText(formatTagButtonLabel(tag, next));
+                styleTagButton(btn, next);
+                applyFilter();
+            });
+            btn.setToolTipText(get("main.tagCycleHint"));
+            tagButtonsPanel.add(btn);
+        }
+        tagButtonsPanel.revalidate();
+        tagButtonsPanel.repaint();
+    }
+
+    private static String formatTagButtonLabel(String tag, TagState state) {
+        return switch (state) {
+            case INCLUDE -> "+ " + tag;
+            case EXCLUDE -> "\u2212 " + tag;  // minus sign
+            case NEUTRAL -> tag;
+        };
+    }
+
+    private static void styleTagButton(JButton btn, TagState state) {
+        switch (state) {
+            case INCLUDE -> {
+                btn.setBackground(new Color(200, 235, 200));
+                btn.setForeground(new Color(30, 100, 30));
+                btn.setOpaque(true);
+            }
+            case EXCLUDE -> {
+                btn.setBackground(new Color(240, 200, 200));
+                btn.setForeground(new Color(140, 30, 30));
+                btn.setOpaque(true);
+            }
+            case NEUTRAL -> {
+                btn.setBackground(null);
+                btn.setForeground(null);
+                btn.setOpaque(false);
+            }
+        }
+    }
+
+    /** Returns readme tags + custom tags, minus globally hidden tags. */
+    private List<String> getEffectiveTags(ModelAsset asset) {
+        java.util.Set<String> tags = new java.util.LinkedHashSet<>(asset.tags());
+        tags.addAll(settings.getCustomTags(asset.path().toAbsolutePath().toString()));
+        tags.removeIf(settings::isTagRemoved);
+        return new java.util.ArrayList<>(tags);
+    }
+
+    private boolean matchesTagFilter(ModelAsset asset) {
+        List<String> included = tagStates.entrySet().stream()
+                .filter(e -> e.getValue() == TagState.INCLUDE)
+                .map(java.util.Map.Entry::getKey)
+                .toList();
+        List<String> excluded = tagStates.entrySet().stream()
+                .filter(e -> e.getValue() == TagState.EXCLUDE)
+                .map(java.util.Map.Entry::getKey)
+                .toList();
+
+        List<String> visibleTags = getEffectiveTags(asset);
+
+        // If any excluded tag matches, hide
+        if (visibleTags.stream().anyMatch(tag -> excluded.stream().anyMatch(tag::equalsIgnoreCase))) {
+            return false;
+        }
+        // If includes are active, model must have at least one included tag
+        if (!included.isEmpty()) {
+            return visibleTags.stream().anyMatch(tag -> included.stream().anyMatch(tag::equalsIgnoreCase));
+        }
+        return true;
+    }
+
     private boolean polygonRangeMatches(ModelAsset asset, Integer minPolygons, Integer maxPolygons) {
         if (minPolygons == null && maxPolygons == null) {
             return true;
@@ -1054,6 +1298,7 @@ public final class MainWindow extends JFrame {
         private final ShimmerPreviewLabel previewLabel = new ShimmerPreviewLabel();
         private final JLabel titleLabel = new JLabel();
         private final JLabel metaLabel = new JLabel();
+        private final JLabel tagsLabel = new JLabel();
         private final JLabel starLabel = new JLabel();
 
         private AssetCellRenderer() {
@@ -1074,6 +1319,9 @@ public final class MainWindow extends JFrame {
             metaLabel.setFont(metaLabel.getFont().deriveFont(11f));
             metaLabel.setForeground(new Color(104, 112, 124));
 
+            tagsLabel.setFont(tagsLabel.getFont().deriveFont(Font.PLAIN, 10f));
+            tagsLabel.setForeground(new Color(80, 130, 180));
+
             starLabel.setFont(starLabel.getFont().deriveFont(Font.BOLD, 16f));
             starLabel.setForeground(new Color(255, 200, 50));
 
@@ -1085,6 +1333,7 @@ public final class MainWindow extends JFrame {
             textPanel.add(titleLabel);
             textPanel.add(javax.swing.Box.createVerticalStrut(2));
             textPanel.add(metaLabel);
+            textPanel.add(tagsLabel);
             bottomPanel.add(textPanel, BorderLayout.CENTER);
             bottomPanel.add(starLabel, BorderLayout.EAST);
             panel.add(bottomPanel, BorderLayout.SOUTH);
@@ -1125,6 +1374,16 @@ public final class MainWindow extends JFrame {
                     metaLabel.setText(formatFileSize(asset.fileSizeBytes()) + " | " + polygonInfo);
                 }
 
+                // Tags
+                List<String> visibleTags = getEffectiveTags(asset);
+                if (!visibleTags.isEmpty()) {
+                    tagsLabel.setText(String.join(", ", visibleTags));
+                    tagsLabel.setVisible(true);
+                } else {
+                    tagsLabel.setText("");
+                    tagsLabel.setVisible(false);
+                }
+
                 // Show thumbnail if available, otherwise shimmer
                 BufferedImage thumb = thumbnailRenderer != null
                         ? thumbnailRenderer.getThumbnail(asset.path()) : null;
@@ -1148,13 +1407,20 @@ public final class MainWindow extends JFrame {
                             + fmt("main.tooltip.size", formatFileSize(asset.fileSizeBytes())) + "<br>"
                             + "<font color='gray'>" + asset.path() + "</font></html>";
                 } else {
-                    tooltip = "<html><b>" + tooltipName + "</b><br>"
-                            + fmt("main.tooltip.polygons", meta.hasKnownPolygonCount() ? nfmt.format(meta.polygonCount()) : get("main.na")) + "<br>"
-                            + fmt("main.tooltip.vertices", nfmt.format(meta.vertexCount())) + "<br>"
-                            + fmt("main.tooltip.bones", nfmt.format(meta.boneCount())) + "<br>"
-                            + fmt("main.tooltip.sequences", nfmt.format(meta.sequenceCount())) + "<br>"
-                            + fmt("main.tooltip.size", formatFileSize(asset.fileSizeBytes())) + "<br>"
-                            + "<font color='gray'>" + asset.path() + "</font></html>";
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("<html><b>").append(tooltipName).append("</b><br>")
+                            .append(fmt("main.tooltip.polygons", meta.hasKnownPolygonCount() ? nfmt.format(meta.polygonCount()) : get("main.na"))).append("<br>")
+                            .append(fmt("main.tooltip.vertices", nfmt.format(meta.vertexCount()))).append("<br>")
+                            .append(fmt("main.tooltip.bones", nfmt.format(meta.boneCount()))).append("<br>")
+                            .append(fmt("main.tooltip.sequences", nfmt.format(meta.sequenceCount()))).append("<br>")
+                            .append(fmt("main.tooltip.size", formatFileSize(asset.fileSizeBytes()))).append("<br>");
+                    if (!visibleTags.isEmpty()) {
+                        sb.append("<font color='#5082b4'>")
+                                .append(fmt("main.tooltip.tags", String.join(", ", visibleTags)))
+                                .append("</font><br>");
+                    }
+                    sb.append("<font color='gray'>").append(asset.path()).append("</font></html>");
+                    tooltip = sb.toString();
                 }
                 panel.setToolTipText(tooltip);
             }

@@ -108,6 +108,9 @@ public final class SettingsDialog extends JDialog {
     private final JComboBox<LanguageEntry> languageCombo = new JComboBox<>(LANGUAGES);
     private final DefaultListModel<ExternalProgram> extProgListModel = new DefaultListModel<>();
     private final JList<ExternalProgram> extProgList = new JList<>(extProgListModel);
+    private final javax.swing.JCheckBox tagsEnabledCheckbox = new javax.swing.JCheckBox(get("settings.tags.enable"));
+    private final DefaultListModel<String> removedTagsListModel = new DefaultListModel<>();
+    private final JList<String> removedTagsList = new JList<>(removedTagsListModel);
     private GlPreviewCanvas cameraPreview;  // small 3D preview in Camera tab
     private Path previewTempFile;           // temp file for extracted preview model
 
@@ -125,6 +128,7 @@ public final class SettingsDialog extends JDialog {
         tabs.addTab(get("settings.theme"),             buildThemePanel());
         tabs.addTab(get("settings.camera"),            buildCameraPanel());
         tabs.addTab(get("settings.externalPrograms"), buildExternalProgramsPanel());
+        tabs.addTab(get("settings.tags"),              buildTagsPanel());
         tabs.addTab(get("settings.logs"),              buildLogsPanel());
 
         setLayout(new BorderLayout(8, 8));
@@ -533,6 +537,39 @@ public final class SettingsDialog extends JDialog {
         return null;
     }
 
+    private JPanel buildTagsPanel() {
+        JPanel outer = new JPanel(new BorderLayout(8, 12));
+        outer.setBorder(BorderFactory.createEmptyBorder(12, 12, 4, 12));
+
+        // Enable checkbox + hint
+        JPanel topPanel = new JPanel(new BorderLayout(0, 4));
+        topPanel.add(tagsEnabledCheckbox, BorderLayout.NORTH);
+        JLabel hint = new JLabel("<html><font color='gray'>" + get("settings.tags.enableHint") + "</font></html>");
+        topPanel.add(hint, BorderLayout.CENTER);
+        outer.add(topPanel, BorderLayout.NORTH);
+
+        // Removed tags list
+        JPanel removedPanel = new JPanel(new BorderLayout(6, 6));
+        removedPanel.setBorder(BorderFactory.createTitledBorder(get("settings.tags.removedTitle")));
+        removedPanel.add(new JLabel("<html><font color='gray'>" + get("settings.tags.removedDesc") + "</font></html>"), BorderLayout.NORTH);
+        removedTagsList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        removedPanel.add(new JScrollPane(removedTagsList), BorderLayout.CENTER);
+
+        JPanel removedButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        JButton restoreBtn = new JButton(get("settings.tags.restore"));
+        restoreBtn.addActionListener(e -> {
+            int[] selected = removedTagsList.getSelectedIndices();
+            for (int i = selected.length - 1; i >= 0; i--) {
+                removedTagsListModel.remove(selected[i]);
+            }
+        });
+        removedButtons.add(restoreBtn);
+        removedPanel.add(removedButtons, BorderLayout.SOUTH);
+
+        outer.add(removedPanel, BorderLayout.CENTER);
+        return outer;
+    }
+
     private JPanel buildLogsPanel() {
         JPanel outer = new JPanel(new BorderLayout(8, 8));
         outer.setBorder(BorderFactory.createEmptyBorder(12, 12, 4, 12));
@@ -666,6 +703,11 @@ public final class SettingsDialog extends JDialog {
         for (int i = 0; i < extProgListModel.size(); i++) programs.add(extProgListModel.get(i));
         settings.setExternalPrograms(programs);
 
+        settings.setTagsEnabled(tagsEnabledCheckbox.isSelected());
+        java.util.Set<String> removedTags = new java.util.LinkedHashSet<>();
+        for (int i = 0; i < removedTagsListModel.size(); i++) removedTags.add(removedTagsListModel.get(i));
+        settings.setRemovedTags(removedTags);
+
         settings.save();
 
         final boolean needsLocaleRefresh = localeChanged;
@@ -762,6 +804,12 @@ public final class SettingsDialog extends JDialog {
         extProgListModel.clear();
         for (ExternalProgram p : settings.externalPrograms()) {
             extProgListModel.addElement(p);
+        }
+
+        tagsEnabledCheckbox.setSelected(settings.tagsEnabled());
+        removedTagsListModel.clear();
+        for (String tag : settings.removedTags()) {
+            removedTagsListModel.addElement(tag);
         }
     }
 }
