@@ -212,7 +212,7 @@ public final class MainWindow extends JFrame {
         scanButton.addActionListener(event -> startScan(false));
         stopButton.addActionListener(event -> stopScan());
         settingsButton.addActionListener(event -> openSettings());
-        recentButton.addActionListener(event -> showRecentModelsPopup());
+        recentButton.addActionListener(event -> showRecentFoldersPopup());
         favoritesToggle.addActionListener(event -> applyFilter());
         rootField.addActionListener(event -> startScan(false));
         advancedFiltersToggle.addActionListener(event -> {
@@ -566,7 +566,16 @@ public final class MainWindow extends JFrame {
     }
 
     private void saveCurrentRootDirectory() {
-        settings.setLastRootDirectory(rootField.getText().trim());
+        String root = rootField.getText().trim();
+        settings.setLastRootDirectory(root);
+        if (!root.isEmpty()) {
+            // Record the folder (or parent of a map file) in recent folders
+            try {
+                Path p = Path.of(root);
+                Path folder = java.nio.file.Files.isRegularFile(p) ? p.getParent() : p;
+                if (folder != null) settings.addRecentFolder(folder.toString());
+            } catch (InvalidPathException ignored) {}
+        }
         settings.save();
         thumbnailTeamColorCombo.repaint();
     }
@@ -900,43 +909,39 @@ public final class MainWindow extends JFrame {
     }
 
     private void showModelDetails(ModelAsset asset) {
-        Path scanRoot = currentScanRoot();
-        // Record as recent (skip temp paths from map archives)
-        if (currentMapSource == null) {
-            settings.addRecentModel(asset.path().toAbsolutePath().toString());
-            settings.save();
+        if (asset.metadata().isHd()) {
+            JOptionPane.showMessageDialog(this,
+                    fmt("main.hdUnsupportedDetail", asset.fileName()),
+                    get("main.hdUnsupportedTitle"),
+                    JOptionPane.WARNING_MESSAGE);
+            return;
         }
-
+        Path scanRoot = currentScanRoot();
         ModelViewerDialog dialog = new ModelViewerDialog(this, asset, scanRoot);
         dialog.setLocationRelativeTo(this);
         dialog.setVisible(true);
     }
 
-    private void showRecentModelsPopup() {
-        List<String> recent = settings.recentModels();
+    private void showRecentFoldersPopup() {
+        List<String> recent = settings.recentFolders();
         if (recent.isEmpty()) {
-            JOptionPane.showMessageDialog(this, get("main.noRecentModels"), get("main.recentModels"), JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(this, get("main.noRecentFolders"), get("main.recentFolders"), JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         JPopupMenu popup = new JPopupMenu();
         for (String absPath : recent) {
             Path p = Path.of(absPath);
-            String name = p.getFileName().toString();
+            String name = p.getFileName() != null ? p.getFileName().toString() : absPath;
             JMenuItem item = new JMenuItem(name);
             item.setToolTipText(absPath);
             item.addActionListener(e -> {
-                try {
-                    if (!java.nio.file.Files.exists(p)) {
-                        showErrorDialog(this, fmt("main.fileNotFound", absPath), get("main.error"));
-                        return;
-                    }
-                    long size = java.nio.file.Files.size(p);
-                    ModelMetadata meta = ModelMetadataExtractor.extract(p);
-                    ModelAsset asset = new ModelAsset(p, size, meta);
-                    showModelDetails(asset);
-                } catch (Exception ex) {
-                    showErrorDialog(this, fmt("main.failedToOpenModel", ex.getMessage()), get("main.error"));
+                if (!java.nio.file.Files.exists(p)) {
+                    showErrorDialog(this, fmt("main.fileNotFound", absPath), get("main.error"));
+                    return;
                 }
+                rootField.setText(absPath);
+                saveCurrentRootDirectory();
+                startScan(false);
             });
             popup.add(item);
         }
@@ -967,6 +972,8 @@ public final class MainWindow extends JFrame {
             for (int i = 0; i < toAdd; i++) {
                 ModelAsset asset = filtered.get(index[0]++);
                 listModel.addElement(asset);
+                // Skip thumbnail rendering for unsupported HD models — the cell shows a badge instead.
+                if (asset.metadata().isHd()) continue;
                 // Queue thumbnail if not cached
                 if (thumbnailRenderer.getThumbnail(asset.path()) == null) {
                     pendingThumbnails++;
@@ -1384,15 +1391,21 @@ public final class MainWindow extends JFrame {
                     tagsLabel.setVisible(false);
                 }
 
-                // Show thumbnail if available, otherwise shimmer
-                BufferedImage thumb = thumbnailRenderer != null
-                        ? thumbnailRenderer.getThumbnail(asset.path()) : null;
-                if (thumb != null) {
-                    previewLabel.setThumbnail(thumb, previewSize);
-                    previewLabel.setText("");
-                } else {
+                // HD models are unsupported — show a badge instead of a thumbnail.
+                if (asset.metadata().isHd()) {
                     previewLabel.setThumbnail(null, previewSize);
-                    previewLabel.setText(asset.fileExtension().toUpperCase(Locale.ROOT));
+                    previewLabel.setText(get("main.hdUnsupportedBadge"));
+                } else {
+                    // Show thumbnail if available, otherwise shimmer
+                    BufferedImage thumb = thumbnailRenderer != null
+                            ? thumbnailRenderer.getThumbnail(asset.path()) : null;
+                    if (thumb != null) {
+                        previewLabel.setThumbnail(thumb, previewSize);
+                        previewLabel.setText("");
+                    } else {
+                        previewLabel.setThumbnail(null, previewSize);
+                        previewLabel.setText(asset.fileExtension().toUpperCase(Locale.ROOT));
+                    }
                 }
 
                 ModelMetadata meta = asset.metadata();

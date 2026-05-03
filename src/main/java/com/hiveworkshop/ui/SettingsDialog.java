@@ -23,7 +23,7 @@ import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JSlider;
+import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
@@ -92,10 +92,8 @@ public final class SettingsDialog extends JDialog {
     private final JComboBox<ThemeEntry> themeCombo = new JComboBox<>(THEMES);
     private final JButton bgColorButton = new JButton();
     private Color bgColor = new Color(0x0F, 0x14, 0x19);
-    private final JSlider yawSlider   = new JSlider(0, 360, (int) AppSettings.DEFAULT_CAMERA_YAW);
-    private final JSlider pitchSlider = new JSlider(-89, 89, (int) AppSettings.DEFAULT_CAMERA_PITCH);
-    private final JLabel  yawLabel    = new JLabel(yawSlider.getValue() + "\u00B0");
-    private final JLabel  pitchLabel  = new JLabel(pitchSlider.getValue() + "\u00B0");
+    private final AngleDial yawDial      = new AngleDial(56, AppSettings.DEFAULT_CAMERA_YAW, get("settings.yaw"));
+    private final AngleDial pitchDial    = new AngleDial(56, AppSettings.DEFAULT_CAMERA_PITCH, -89, 89, get("settings.pitch"));
     private final JTextField animNameField = new JTextField("Stand", 12);
     private final JComboBox<ThumbnailQuality> qualityCombo = new JComboBox<>(ThumbnailQuality.values());
     private record LanguageEntry(String code, String labelKey) {
@@ -113,13 +111,14 @@ public final class SettingsDialog extends JDialog {
     private final JList<String> removedTagsList = new JList<>(removedTagsListModel);
     private GlPreviewCanvas cameraPreview;  // small 3D preview in Camera tab
     private Path previewTempFile;           // temp file for extracted preview model
+    private boolean syncingCameraFromCanvas;
 
     public SettingsDialog(JFrame owner, AppSettings settings) {
         super(owner, get("settings.title"), true);
         this.settings = settings;
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
-        setSize(new Dimension(620, 560));
-        setMinimumSize(new Dimension(520, 420));
+        setSize(new Dimension(775, 560));
+        setMinimumSize(new Dimension(650, 420));
         setResizable(true);
         setLocationRelativeTo(owner);
 
@@ -251,86 +250,74 @@ public final class SettingsDialog extends JDialog {
         JPanel outer = new JPanel(new BorderLayout(8, 8));
         outer.setBorder(BorderFactory.createEmptyBorder(8, 12, 4, 12));
 
-        // ── Controls (left/top) ──
+        // ── Left: Controls ──
         JPanel controls = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(4, 6, 4, 6);
         gbc.anchor = GridBagConstraints.WEST;
 
+        int row = 0;
+
         // Description
-        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 3; gbc.weightx = 1.0;
+        gbc.gridx = 0; gbc.gridy = row++; gbc.gridwidth = 2; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         controls.add(new JLabel("<html>" + get("settings.cameraDesc") + "</html>"), gbc);
 
-        // Yaw (azimuth) slider
-        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1; gbc.weightx = 0;
-        gbc.fill = GridBagConstraints.NONE;
-        controls.add(new JLabel(get("settings.yaw")), gbc);
+        // Angle dials — one per row, label left, dial right
+        yawDial.addChangeListener(e -> updateCameraPreview());
+        pitchDial.addChangeListener(e -> updateCameraPreview());
 
-        gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
-        yawSlider.setMajorTickSpacing(90);
-        yawSlider.setMinorTickSpacing(15);
-        yawSlider.setPaintTicks(true);
-        yawSlider.setPaintLabels(true);
-        yawSlider.addChangeListener(e -> {
-            yawLabel.setText(yawSlider.getValue() + "\u00B0");
-            updateCameraPreview();
-        });
-        controls.add(yawSlider, gbc);
-
-        gbc.gridx = 2; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
-        yawLabel.setPreferredSize(new Dimension(40, 20));
-        controls.add(yawLabel, gbc);
-
-        // Pitch (elevation) slider
-        gbc.gridx = 0; gbc.gridy = 2; gbc.weightx = 0;
-        controls.add(new JLabel(get("settings.pitch")), gbc);
-
-        gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
-        pitchSlider.setMajorTickSpacing(30);
-        pitchSlider.setMinorTickSpacing(10);
-        pitchSlider.setPaintTicks(true);
-        pitchSlider.setPaintLabels(true);
-        pitchSlider.addChangeListener(e -> {
-            pitchLabel.setText(pitchSlider.getValue() + "\u00B0");
-            updateCameraPreview();
-        });
-        controls.add(pitchSlider, gbc);
-
-        gbc.gridx = 2; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
-        pitchLabel.setPreferredSize(new Dimension(40, 20));
-        controls.add(pitchLabel, gbc);
+        for (var entry : new Object[][]{
+                {get("settings.yaw"), yawDial},
+                {get("settings.pitch"), pitchDial}}) {
+            gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.weightx = 0;
+            gbc.fill = GridBagConstraints.NONE; gbc.anchor = GridBagConstraints.WEST;
+            controls.add(new JLabel((String) entry[0]), gbc);
+            gbc.gridx = 1; gbc.anchor = GridBagConstraints.WEST;
+            controls.add((AngleDial) entry[1], gbc);
+            row++;
+        }
 
         // Thumbnail animation name
-        gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 1; gbc.weightx = 0;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.weightx = 0;
         gbc.fill = GridBagConstraints.NONE;
         controls.add(new JLabel(get("settings.thumbnailAnim")), gbc);
-
-        gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.gridx = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
+        animNameField.setColumns(10);
         controls.add(animNameField, gbc);
+        row++;
 
-        gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 3; gbc.weightx = 1.0;
+        gbc.gridx = 0; gbc.gridy = row++; gbc.gridwidth = 2; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         controls.add(new JLabel("<html><font color='gray'>" + get("settings.thumbnailAnimHint") + "</font></html>"), gbc);
 
         // Thumbnail quality
-        gbc.gridx = 0; gbc.gridy = 5; gbc.gridwidth = 1; gbc.weightx = 0;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.weightx = 0;
         gbc.fill = GridBagConstraints.NONE;
         controls.add(new JLabel(get("settings.thumbnailQuality")), gbc);
-
-        gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.gridx = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
+        qualityCombo.setMaximumSize(new Dimension(160, 26));
+        qualityCombo.setPreferredSize(new Dimension(160, 26));
         controls.add(qualityCombo, gbc);
+        row++;
 
-        gbc.gridx = 0; gbc.gridy = 6; gbc.gridwidth = 3; gbc.weightx = 1.0;
+        gbc.gridx = 0; gbc.gridy = row++; gbc.gridwidth = 2; gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         controls.add(new JLabel("<html><font color='gray'>" + get("settings.thumbnailQualityHint") + "</font></html>"), gbc);
 
-        // Background color
-        gbc.gridx = 0; gbc.gridy = 7; gbc.gridwidth = 1; gbc.weightx = 0;
-        gbc.fill = GridBagConstraints.NONE;
-        controls.add(new JLabel(get("settings.bgColor")), gbc);
+        // Wrap controls in a scroll pane so they don't get clipped
+        JScrollPane controlsScroll = new JScrollPane(controls);
+        controlsScroll.setBorder(BorderFactory.createEmptyBorder());
+        controlsScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
 
-        gbc.gridx = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE;
+        // ── Right: 3D Preview ──
+        JPanel previewPanel = new JPanel(new BorderLayout());
+        previewPanel.setBorder(BorderFactory.createTitledBorder(get("settings.preview")));
+        previewPanel.setPreferredSize(new Dimension(250, 0));
+        JLabel loadingLabel = new JLabel(get("settings.loadingPreview"), JLabel.CENTER);
+        previewPanel.add(loadingLabel, BorderLayout.CENTER);
+
+        // Top bar: background color + HD toggle
         bgColorButton.setPreferredSize(new Dimension(80, 26));
         bgColorButton.setBackground(bgColor);
         bgColorButton.setOpaque(true);
@@ -345,24 +332,46 @@ public final class SettingsDialog extends JDialog {
                 }
             }
         });
-        controls.add(bgColorButton, gbc);
 
-        outer.add(controls, BorderLayout.NORTH);
+        JPanel bgColorRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
+        bgColorRow.add(new JLabel(get("settings.bgColor")));
+        bgColorRow.add(bgColorButton);
 
-        // ── 3D Preview (center, fills remaining space) ──
-        JPanel previewPanel = new JPanel(new BorderLayout());
-        previewPanel.setBorder(BorderFactory.createTitledBorder(get("settings.preview")));
-        JLabel loadingLabel = new JLabel(get("settings.loadingPreview"), JLabel.CENTER);
+        JPanel previewWrapper = new JPanel(new BorderLayout());
+        previewWrapper.add(bgColorRow, BorderLayout.NORTH);
+        previewWrapper.add(previewPanel, BorderLayout.CENTER);
+
+        // Horizontal split: controls left, preview right
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, controlsScroll, previewWrapper);
+        splitPane.setResizeWeight(0.5);
+        splitPane.setDividerLocation(300);
+        splitPane.setContinuousLayout(true);
+        outer.add(splitPane, BorderLayout.CENTER);
+
+        loadPreviewModel(previewPanel, loadingLabel);
+
+        return outer;
+    }
+
+    private void loadPreviewModel(JPanel previewPanel, JLabel loadingLabel) {
+        // Stop and remove current preview
+        if (cameraPreview != null) {
+            cameraPreview.stopRenderThread();
+            previewPanel.remove(cameraPreview);
+            cameraPreview = null;
+        }
+        loadingLabel.setText(Messages.get("settings.loadingPreview"));
+        previewPanel.removeAll();
         previewPanel.add(loadingLabel, BorderLayout.CENTER);
-        outer.add(previewPanel, BorderLayout.CENTER);
+        previewPanel.revalidate();
+        previewPanel.repaint();
 
-        // Load preview model asynchronously
         new SwingWorker<ReterasParsedModel, Void>() {
             Path tempFile;
             @Override protected ReterasParsedModel doInBackground() {
-                // Try to extract footman.mdx from game data sources
                 GameDataSource gds = GameDataSource.getInstance();
-                tempFile = gds.extractToTemp("units\\human\\footman\\footman.mdx");
+                String modelPath = "units\\human\\footman\\footman.mdx";
+                tempFile = gds.extractToTemp(modelPath);
                 if (tempFile == null) return null;
                 previewTempFile = tempFile;
                 return ReterasModelParser.parse(tempFile);
@@ -376,11 +385,11 @@ public final class SettingsDialog extends JDialog {
                     }
                     previewPanel.remove(loadingLabel);
                     cameraPreview = new GlPreviewCanvas(parsed);
-                    cameraPreview.setInitialCamera(yawSlider.getValue(), pitchSlider.getValue());
+                    cameraPreview.setInitialCamera(yawDial.getAngleInt(), pitchDial.getAngleInt());
+                    cameraPreview.setCameraOrbitListener(SettingsDialog.this::syncDialsFromCanvas);
                     cameraPreview.setShadingMode(GlPreviewCanvas.ShadingMode.TEXTURED);
                     cameraPreview.setBackgroundColor(String.format("%02X%02X%02X",
                             bgColor.getRed(), bgColor.getGreen(), bgColor.getBlue()));
-                    // Select "Stand" animation if available
                     selectStandAnimation(cameraPreview, parsed);
                     cameraPreview.setPlaying(true);
                     previewPanel.add(cameraPreview, BorderLayout.CENTER);
@@ -391,13 +400,25 @@ public final class SettingsDialog extends JDialog {
                 }
             }
         }.execute();
-
-        return outer;
     }
 
     private void updateCameraPreview() {
+        if (syncingCameraFromCanvas) return;
         if (cameraPreview != null) {
-            cameraPreview.setInitialCamera(yawSlider.getValue(), pitchSlider.getValue());
+            cameraPreview.setInitialCamera(yawDial.getAngleInt(), pitchDial.getAngleInt());
+        }
+    }
+
+    /** Called from {@link GlPreviewCanvas} after a mouse-orbit drag. Updates the dials
+     *  without re-applying their rounded values back to the canvas mid-drag. */
+    private void syncDialsFromCanvas() {
+        if (cameraPreview == null) return;
+        syncingCameraFromCanvas = true;
+        try {
+            yawDial.setAngle(cameraPreview.getYawDegrees());
+            pitchDial.setAngle(cameraPreview.getPitchDegrees());
+        } finally {
+            syncingCameraFromCanvas = false;
         }
     }
 
@@ -686,8 +707,8 @@ public final class SettingsDialog extends JDialog {
         String hex = String.format("%02X%02X%02X", bgColor.getRed(), bgColor.getGreen(), bgColor.getBlue());
         settings.setBgColor(hex);
 
-        settings.setCameraYaw(yawSlider.getValue());
-        settings.setCameraPitch(pitchSlider.getValue());
+        settings.setCameraYaw(yawDial.getAngleInt());
+        settings.setCameraPitch(pitchDial.getAngleInt());
         settings.setThumbnailAnimName(animNameField.getText());
         settings.setThumbnailQuality((ThumbnailQuality) qualityCombo.getSelectedItem());
 
@@ -785,10 +806,8 @@ public final class SettingsDialog extends JDialog {
         }
         bgColorButton.setBackground(bgColor);
 
-        yawSlider.setValue((int) settings.cameraYaw());
-        yawLabel.setText(yawSlider.getValue() + "\u00B0");
-        pitchSlider.setValue((int) settings.cameraPitch());
-        pitchLabel.setText(pitchSlider.getValue() + "\u00B0");
+        yawDial.setAngle(settings.cameraYaw());
+        pitchDial.setAngle(settings.cameraPitch());
         animNameField.setText(settings.thumbnailAnimName());
         qualityCombo.setSelectedItem(settings.thumbnailQuality());
 

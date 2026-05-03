@@ -120,9 +120,18 @@ public final class ReterasModelParser {
         int sequenceCount = animNames.size();
         String modelName = model.name != null ? model.name.trim() : "";
 
+        // HD detection: any material with a non-empty shader name marks the model as Reforged HD.
+        // The format-version field is unreliable — non-HD models can also be v900+.
+        boolean isHd = false;
+        if (model.materials != null) {
+            for (MdlxMaterial m : model.materials) {
+                if (m != null && m.shader != null && !m.shader.isEmpty()) { isHd = true; break; }
+            }
+        }
+
         return new ModelMetadata(List.copyOf(animNames), List.copyOf(texturePaths),
                 hasData ? polyCount : ModelMetadata.UNKNOWN_POLYGON_COUNT,
-                vertexCount, boneCount, sequenceCount, modelName);
+                vertexCount, boneCount, sequenceCount, modelName, isHd);
     }
 
     // ── Mesh ─────────────────────────────────────────────────────────────────
@@ -319,14 +328,9 @@ public final class ReterasModelParser {
             bones[i] = new BoneNode(node.objectId, node.parentId, nodeName, type, node.flags, pivot, trans, rot, scale);
         }
 
-        // Geoset skinning (SD and HD).
+        // Geoset skinning (SD only — HD/Reforged not supported).
         // IMPORTANT: use the same skip conditions as buildMesh() so the geoset index in
         // animData always maps to the same vertex-offset range in ModelMesh.vertices().
-        // Build node-index → objectId mapping for HD skin data
-        Map<Integer, Integer> nodeIndexToObjectId = new HashMap<>();
-        for (int ni = 0; ni < allNodes.size(); ni++) {
-            nodeIndexToObjectId.put(ni, allNodes.get(ni).objectId);
-        }
         List<GeosetSkinData> geosets = new ArrayList<>();
         for (MdlxGeoset g : model.geosets) {
             // Same guard as buildMesh(): null, missing faces, or too-short arrays → EMPTY slot
@@ -336,25 +340,6 @@ public final class ReterasModelParser {
                 continue;
             }
             int geoMatId = (int) g.materialId;
-            // HD models have the 'skin' short[] array with 8 entries per vertex:
-            // [boneIdx0, boneIdx1, boneIdx2, boneIdx3, weight0, weight1, weight2, weight3]
-            if (g.skin != null && g.skin.length > 0) {
-                int vertCount = g.vertices.length / 3;
-                int[] hdBoneIds = new int[vertCount * 4];
-                float[] hdWeights = new float[vertCount * 4];
-                for (int vi = 0; vi < vertCount; vi++) {
-                    int skinBase = vi * 8;
-                    for (int bi = 0; bi < 4; bi++) {
-                        int nodeIdx = (skinBase + bi < g.skin.length) ? (g.skin[skinBase + bi] & 0xFF) : 0;
-                        int weight  = (skinBase + 4 + bi < g.skin.length) ? (g.skin[skinBase + 4 + bi] & 0xFF) : 0;
-                        hdBoneIds[vi * 4 + bi] = nodeIndexToObjectId.getOrDefault(nodeIdx, 0);
-                        hdWeights[vi * 4 + bi] = weight / 255f;
-                    }
-                }
-                geosets.add(new GeosetSkinData(g.vertices.clone(), new int[0], new int[0][], geoMatId,
-                        hdBoneIds, hdWeights));
-                continue;
-            }
 
             int vertCount = g.vertices.length / 3;
             int groupCount = (g.matrixGroups != null) ? g.matrixGroups.length : 0;

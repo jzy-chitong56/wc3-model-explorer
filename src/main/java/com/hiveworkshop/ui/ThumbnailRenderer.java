@@ -465,15 +465,7 @@ public final class ThumbnailRenderer {
                 System.arraycopy(mesh.normals(), vertOffset * 3, norms, 0, vc * 3);
 
                 // Apply animation pose if bone matrices available
-                if (boneMatrices != null && skin.hasHdSkinning()) {
-                    float[] bindNormals = mesh.normals();
-                    for (int vi = 0; vi < vc; vi++) {
-                        float[] p = GlPreviewCanvas.transformVertexHd(skin, vi, boneMatrices);
-                        verts[vi * 3] = p[0]; verts[vi * 3 + 1] = p[1]; verts[vi * 3 + 2] = p[2];
-                        float[] n = GlPreviewCanvas.transformNormalHd(skin, vi, vertOffset, bindNormals, boneMatrices);
-                        norms[vi * 3] = n[0]; norms[vi * 3 + 1] = n[1]; norms[vi * 3 + 2] = n[2];
-                    }
-                } else if (boneMatrices != null && skin.hasSkinning()) {
+                if (boneMatrices != null && skin.hasSkinning()) {
                     float[] bindNormals = mesh.normals();
                     for (int vi = 0; vi < vc; vi++) {
                         float[] p = GlPreviewCanvas.transformVertex(skin, vi, boneMatrices);

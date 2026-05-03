@@ -29,13 +29,13 @@ public final class AppSettings {
     private static final String KEY_THUMBNAIL_ANIM      = "thumbnailAnimName";
     private static final String KEY_THUMBNAIL_QUALITY   = "thumbnailQuality";
     private static final String KEY_THUMBNAIL_TEAM_COLOR = "thumbnailTeamColor";
-    private static final String KEY_RECENT_MODELS       = "recentModels";
+    private static final String KEY_RECENT_FOLDERS      = "recentFolders";
     private static final String KEY_FAVORITES            = "favorites";
     private static final String SETTINGS_FILE_NAME      = "settings.properties";
-    private static final int MAX_RECENT_MODELS           = 20;
+    private static final int MAX_RECENT_FOLDERS          = 15;
 
-    public static final float DEFAULT_CAMERA_YAW   = 200f;
-    public static final float DEFAULT_CAMERA_PITCH  = 20f;
+    public static final float DEFAULT_CAMERA_YAW       = 200f;
+    public static final float DEFAULT_CAMERA_PITCH    = 20f;
 
     private final Path settingsPath;
     private String      lastRootDirectory = "";
@@ -51,7 +51,7 @@ public final class AppSettings {
     private ThumbnailQuality thumbnailQuality = ThumbnailQuality.MEDIUM;
     private int            thumbnailTeamColor = 0;
     private List<ExternalProgram> externalPrograms = new ArrayList<>();
-    private List<String> recentModels = new ArrayList<>();
+    private List<String> recentFolders = new ArrayList<>();
     private java.util.Set<String> favorites = new java.util.LinkedHashSet<>();
     private String locale = "en";
     private boolean tagsEnabled = true;
@@ -180,14 +180,14 @@ public final class AppSettings {
         this.externalPrograms = programs == null ? new ArrayList<>() : new ArrayList<>(programs);
     }
 
-    public List<String> recentModels() { return new ArrayList<>(recentModels); }
+    public List<String> recentFolders() { return new ArrayList<>(recentFolders); }
 
-    public void addRecentModel(String absolutePath) {
+    public void addRecentFolder(String absolutePath) {
         if (absolutePath == null || absolutePath.isBlank()) return;
-        recentModels.remove(absolutePath);
-        recentModels.add(0, absolutePath);
-        if (recentModels.size() > MAX_RECENT_MODELS) {
-            recentModels = new ArrayList<>(recentModels.subList(0, MAX_RECENT_MODELS));
+        recentFolders.remove(absolutePath);
+        recentFolders.add(0, absolutePath);
+        if (recentFolders.size() > MAX_RECENT_FOLDERS) {
+            recentFolders = new ArrayList<>(recentFolders.subList(0, MAX_RECENT_FOLDERS));
         }
     }
 
@@ -278,7 +278,7 @@ public final class AppSettings {
             properties.setProperty("external.program." + i + ".arguments", p.arguments());
         }
         properties.setProperty("external.program.count", String.valueOf(externalPrograms.size()));
-        properties.setProperty(KEY_RECENT_MODELS, String.join("|", recentModels));
+        properties.setProperty(KEY_RECENT_FOLDERS, String.join("|", recentFolders));
         properties.setProperty(KEY_FAVORITES, String.join("|", favorites));
         properties.setProperty("locale", locale);
         properties.setProperty("tagsEnabled", String.valueOf(tagsEnabled));
@@ -332,8 +332,8 @@ public final class AppSettings {
             thumbnailQuality = parseThumbnailQuality(qualityVal);
             thumbnailTeamColor = Math.max(0, Math.min(TeamColorOptions.COUNT - 1,
                     parseInt(properties.getProperty(KEY_THUMBNAIL_TEAM_COLOR), 0)));
-            String recentRaw = properties.getProperty(KEY_RECENT_MODELS, "");
-            recentModels = recentRaw.isEmpty() ? new ArrayList<>()
+            String recentRaw = properties.getProperty(KEY_RECENT_FOLDERS, "");
+            recentFolders = recentRaw.isEmpty() ? new ArrayList<>()
                     : new ArrayList<>(Arrays.asList(recentRaw.split("\\|")));
             String favRaw = properties.getProperty(KEY_FAVORITES, "");
             favorites = favRaw.isEmpty() ? new java.util.LinkedHashSet<>()
