@@ -1391,9 +1391,9 @@ public final class MainWindow extends JFrame {
                     tagsLabel.setVisible(false);
                 }
 
-                // HD models are unsupported — show a badge instead of a thumbnail.
+                // HD models are unsupported — show a static badge instead of a thumbnail.
                 if (asset.metadata().isHd()) {
-                    previewLabel.setThumbnail(null, previewSize);
+                    previewLabel.setUnsupported(previewSize);
                     previewLabel.setText(get("main.hdUnsupportedBadge"));
                 } else {
                     // Show thumbnail if available, otherwise shimmer
@@ -1470,12 +1470,15 @@ public final class MainWindow extends JFrame {
         private static final Color LOADING_TEXT_COLOR = new Color(140, 150, 160);
         private static final Color SPINNER_COLOR = new Color(100, 140, 200);
         private static final Color PREVIEW_FRAME = new Color(255, 255, 255, 24);
+        private static final Color UNSUPPORTED_BG = new Color(36, 38, 44);
         private static final int IMAGE_OVERSCAN = 2;
         private BufferedImage scaledThumb;
         private BufferedImage lastSource;
         private int lastSize;
+        private boolean unsupported;
 
         void setThumbnail(BufferedImage thumb, int displaySize) {
+            unsupported = false;
             if (thumb != null) {
                 // Only rescale if source or size changed
                 if (thumb != lastSource || displaySize != lastSize) {
@@ -1491,6 +1494,16 @@ public final class MainWindow extends JFrame {
             repaint();
         }
 
+        /** Static "unsupported" placeholder — no shimmer, no spinner, just a flat
+         *  background. The cell's {@link JLabel#setText(String)} content is drawn on top. */
+        void setUnsupported(int displaySize) {
+            unsupported = true;
+            scaledThumb = null;
+            lastSource = null;
+            lastSize = displaySize;
+            repaint();
+        }
+
         @Override
         protected void paintComponent(Graphics g) {
             int w = getWidth();
@@ -1501,7 +1514,14 @@ public final class MainWindow extends JFrame {
             g2.setColor(getBackground());
             g2.fillRoundRect(0, 0, w, h, 18, 18);
 
-            if (scaledThumb == null) {
+            if (scaledThumb == null && unsupported) {
+                // Static placeholder for HD/unsupported models — no animation.
+                Shape clip = g2.getClip();
+                g2.clip(new RoundRectangle2D.Float(0, 0, w, h, 18, 18));
+                g2.setColor(UNSUPPORTED_BG);
+                g2.fillRect(0, 0, w, h);
+                g2.setClip(clip);
+            } else if (scaledThumb == null) {
                 // Draw shimmer animation
                 float phase = (System.currentTimeMillis() % 1500) / 1500f;
                 int bandWidth = w / 3;

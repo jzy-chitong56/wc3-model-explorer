@@ -23,11 +23,19 @@ Scan directories or map archives, view 3D thumbnails, and explore model internal
 - Animated 3D thumbnail grid with configurable size (128–352px) and render quality
 - Real-time search by filename or internal model name
 - Sort by name, file size, or parent folder
-- Favorites and recent models tracking
+- Favorites and recent folders tracking
 - Advanced filters: animation name, texture path, polygon range, file size range, portrait filter
 - Team color selector for thumbnails (25 colors)
-- Right-click context menu: copy path/file, open in explorer, open in external program
+- Right-click context menu: copy path/file, open in explorer, open in external program, manage tags
 - Drag & drop models to external applications
+
+### Tagging
+
+- Auto-extracted tags from `readme.html` files placed in a model's folder (or its parent), parsing lines like `Tags: Hero, Unit, Historic`
+- Per-model custom tags added via the right-click **Tags** submenu
+- Tri-state tag filter buttons — click to cycle **Neutral → Include → Exclude** to require or hide models with a given tag
+- Hide unwanted tags from the filter bar via **Settings > Tags**, with a one-click restore for previously hidden tags
+- Auto-extraction can be toggled off entirely in settings if you prefer purely manual tagging
 
 ### 3D Model Viewer
 
@@ -69,6 +77,7 @@ BLP, DDS, TGA, PNG, JPEG
 - Thumbnail animation pose and render quality
 - 3D background color picker
 - External program configuration with `{file}` placeholder
+- Tag parsing toggle and hidden-tag management
 
 ## Usage
 
