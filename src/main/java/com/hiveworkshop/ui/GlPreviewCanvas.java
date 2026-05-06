@@ -46,6 +46,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private float   initialPitch = 20.0f;
     private float   yawDegrees   = 200.0f;
     private float   pitchDegrees = 20.0f;
+    private Runnable cameraOrbitListener;
     private float   distance     = 300.0f;
     private float   panX         = 0.0f;
     private float   panY         = 0.0f;
@@ -2906,7 +2907,10 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
             @Override public void mouseReleased(java.awt.event.MouseEvent e){draggingOrbit=false;draggingPan=false;}
             @Override public void mouseDragged(java.awt.event.MouseEvent e){
                 int dx=e.getX()-lastMouseX,dy=e.getY()-lastMouseY;lastMouseX=e.getX();lastMouseY=e.getY();
-                if(draggingOrbit){yawDegrees+=dx*0.5f;pitchDegrees=clamp(pitchDegrees+dy*0.4f,-89,89);}
+                if(draggingOrbit){
+                    yawDegrees+=dx*0.5f;pitchDegrees=clamp(pitchDegrees+dy*0.4f,-89,89);
+                    if(cameraOrbitListener!=null)cameraOrbitListener.run();
+                }
                 else if(draggingPan){float sc=Math.max(0.05f,distance/900f);panX+=dx*sc;panY-=dy*sc;}
             }
             @Override public void mouseClicked(java.awt.event.MouseEvent e){if(SwingUtilities.isRightMouseButton(e)&&e.getClickCount()==2)resetCamera();}
@@ -2933,6 +2937,14 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         this.initialPitch = pitch;
         this.yawDegrees = yaw;
         this.pitchDegrees = pitch;
+    }
+
+    public float getYawDegrees() { return yawDegrees; }
+    public float getPitchDegrees() { return pitchDegrees; }
+
+    /** Fires after a left-mouse-button orbit drag changes yaw/pitch. */
+    public void setCameraOrbitListener(Runnable listener) {
+        this.cameraOrbitListener = listener;
     }
 
     private void resetCamera(){yawDegrees=initialYaw;pitchDegrees=initialPitch;panX=0f;panY=0f;applyInitialCameraDistance();}

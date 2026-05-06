@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.hiveworkshop"
-version = "1.2.0"
+version = "1.3.0"
 
 repositories {
     mavenCentral()
@@ -49,6 +49,7 @@ runtime {
         "java.desktop",
         "java.datatransfer",
         "java.logging",
+        "java.naming",
         "jdk.unsupported"
     )
 

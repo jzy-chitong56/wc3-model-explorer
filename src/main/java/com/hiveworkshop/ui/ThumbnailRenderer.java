@@ -469,13 +469,9 @@ public final class ThumbnailRenderer {
                     float[] bindNormals = mesh.normals();
                     for (int vi = 0; vi < vc; vi++) {
                         float[] p = GlPreviewCanvas.transformVertex(skin, vi, boneMatrices);
-                        verts[vi * 3] = p[0];
-                        verts[vi * 3 + 1] = p[1];
-                        verts[vi * 3 + 2] = p[2];
+                        verts[vi * 3] = p[0]; verts[vi * 3 + 1] = p[1]; verts[vi * 3 + 2] = p[2];
                         float[] n = GlPreviewCanvas.transformNormal(skin, vi, vertOffset, bindNormals, boneMatrices);
-                        norms[vi * 3] = n[0];
-                        norms[vi * 3 + 1] = n[1];
-                        norms[vi * 3 + 2] = n[2];
+                        norms[vi * 3] = n[0]; norms[vi * 3 + 1] = n[1]; norms[vi * 3 + 2] = n[2];
                     }
                 }
 
