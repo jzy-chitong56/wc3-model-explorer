@@ -96,12 +96,13 @@ public final class SettingsDialog extends JDialog {
     private final AngleDial pitchDial    = new AngleDial(56, AppSettings.DEFAULT_CAMERA_PITCH, -89, 89, get("settings.pitch"));
     private final JTextField animNameField = new JTextField("Stand", 12);
     private final JComboBox<ThumbnailQuality> qualityCombo = new JComboBox<>(ThumbnailQuality.values());
-    private record LanguageEntry(String code, String labelKey) {
-        @Override public String toString() { return Messages.get(labelKey); }
+    private record LanguageEntry(String code, String label) {
+        @Override public String toString() { return label; }
     }
     private static final LanguageEntry[] LANGUAGES = {
-            new LanguageEntry("en", "lang.en"),
-            new LanguageEntry("fr", "lang.fr"),
+            new LanguageEntry("en", "English"),
+            new LanguageEntry("fr", "Français"),
+            new LanguageEntry("zh-CN", "简体中文"),
     };
     private final JComboBox<LanguageEntry> languageCombo = new JComboBox<>(LANGUAGES);
     private final DefaultListModel<ExternalProgram> extProgListModel = new DefaultListModel<>();
