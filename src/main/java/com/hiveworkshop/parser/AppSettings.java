@@ -53,7 +53,7 @@ public final class AppSettings {
     private List<ExternalProgram> externalPrograms = new ArrayList<>();
     private List<String> recentFolders = new ArrayList<>();
     private java.util.Set<String> favorites = new java.util.LinkedHashSet<>();
-    private String locale = "en";
+    private String locale = "";
     private boolean tagsEnabled = true;
     private java.util.Set<String> removedTags = new java.util.LinkedHashSet<>();
     private java.util.Map<String, java.util.Set<String>> customModelTags = new java.util.LinkedHashMap<>();
@@ -205,7 +205,7 @@ public final class AppSettings {
     public String locale() { return locale; }
 
     public void setLocale(String locale) {
-        this.locale = (locale == null || locale.isBlank()) ? "en" : locale;
+        this.locale = (locale == null) ? "" : locale;
     }
 
     public boolean tagsEnabled() { return tagsEnabled; }
@@ -350,7 +350,7 @@ public final class AppSettings {
                     externalPrograms.add(new ExternalProgram(pName, pCmd, pArgs));
                 }
             }
-            locale = properties.getProperty("locale", "en");
+            locale = properties.getProperty("locale", "");
             tagsEnabled = !"false".equalsIgnoreCase(properties.getProperty("tagsEnabled", "true"));
             String removedTagsRaw = properties.getProperty("removedTags", "");
             removedTags = removedTagsRaw.isEmpty() ? new java.util.LinkedHashSet<>()
