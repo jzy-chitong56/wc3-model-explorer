@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-05-17
+
+### Added
+- Simplified Chinese (zh-CN) translation (thanks to @jzy-chitong56)
+- Auto-detect OS language on first launch — picks French or Simplified Chinese if the OS matches, falls back to English otherwise
+
+### Changed
+- Language selector now uses autonyms — each language is displayed in its own native form (`English`, `Français`, `简体中文`) so users can recognise their language regardless of the current UI locale
+
 ## [1.3.0] - 2026-05-03
 
 ### Added

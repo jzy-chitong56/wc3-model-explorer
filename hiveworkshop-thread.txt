@@ -1,0 +1,181 @@
+[CENTER][SIZE=6][B]WC3 Model Explorer[/B][/SIZE]
+[SIZE=3]Browse, preview, and inspect Warcraft III models[/SIZE][/CENTER]
+
+[HR][/HR]
+
+[SIZE=5][B]Overview[/B][/SIZE]
+
+WC3 Model Explorer is a standalone desktop application for browsing and previewing Warcraft III model files (MDX/MDL, no HD). Point it at a folder — or open a map archive — and instantly get a 3D thumbnail grid of every model inside. Click any thumbnail to open a full 3D viewer with animation playback, texture inspection, UV maps, bone trees, and more.
+
+[URL='https://www.hiveworkshop.com/media/wc3-model-explorer.144731/'][B]Video demonstration here[/B][/URL]
+
+[URL='https://github.com/Jaccouille/wc3-model-explorer'][B]GitHub Repository[/B][/URL]
+
+[SIZE=4][B]Supported Formats[/B][/SIZE]
+[LIST]
+[*][B]Model files:[/B] Should handle MDX 800 to 1200. Doesn't support Reforged HD models.
+[*][B]Map archives:[/B] .w3x / .w3m — Warcraft III Reforged map format. Older (pre-Reforged) maps using MPQ format are also supported.
+[/LIST]
+
+
+[HR][/HR]
+
+[SIZE=5][B]Features[/B][/SIZE]
+
+[SIZE=4][B]Model Browser[/B][/SIZE]
+[LIST]
+[*]Recursive scanning of directories and map archives ([B].w3x[/B], [B].w3m[/B])
+[*]3D thumbnail grid with configurable size (128–352px) and render quality
+[*]Real-time search by filename or internal model name
+[*]Sort by name, file size, or parent folder
+[*]Favorites and recent models tracking
+[*]Advanced filters: animation name, texture path, polygon range, file size range, portrait filter
+[*]Team color selector for thumbnails
+[*]Right-click context menu: copy path/file, open file location, open in external program, delete
+[*]Drag & drop models to external applications (copies the file)
+[/LIST]
+
+[SIZE=4][B]3D Model Viewer[/B][/SIZE]
+[LIST]
+[*]Orbit, pan, and zoom camera with mouse controls
+[*]7 shading modes: Solid, Textured, Lit, Normals, Geoset Colors, Bone Count heat map, Wireframe
+[*]Animation playback with sequence selector, play/pause, loop, speed control (0.1x–3x)
+[*]Model camera view toggle — use the camera defined in the model file
+[*]Overlay toggles: extents, bones, helpers, attachments, ribbon emitters, particle emitters, collision shapes, node names, grid
+[*]Screenshot export to PNG
+[*]On-screen stats HUD (geosets, vertices, triangles, bones, sequences)
+[/LIST]
+
+[SIZE=4][B]Model Inspection Tabs[/B][/SIZE]
+[LIST]
+[*][B]Animation[/B] — sequence list with duration, scrubber, speed control, loop, recenter
+[*][B]Info[/B] — file name, model name, path, size, vertex/polygon/bone/geoset/sequence/texture counts, bounding radius
+[*][B]Textures[/B] — texture list with source indicator (CASC/MPQ/disk), hover preview, zoomable popup
+[*][B]Materials[/B] — material layers with filter modes and geoset associations
+[*][B]Geosets[/B] — per-geoset vertex count, material, filter mode — click to highlight in the 3D view
+[*][B]UV Map[/B] — per-geoset/layer UV visualization with wireframe and alpha toggles
+[*][B]Nodes[/B] — bone tree hierarchy — click to highlight in the 3D view
+[/LIST]
+
+[SIZE=4][B]Data Sources & Texture Resolution[/B][/SIZE]
+
+Models reference textures from game archives. WC3 Model Explorer can load textures from:
+[LIST]
+[*][B]CASC[/B] — Warcraft III Reforged installations (auto-detected)
+[*][B]MPQ[/B] — classic Warcraft III archives (multiple archives supported)
+[*][B]Disk[/B] — textures alongside model files
+[/LIST]
+Supported texture formats: [B]BLP[/B], [B]DDS[/B], [B]TGA[/B], [B]PNG[/B], [B]JPEG[/B]
+
+[SIZE=4][B]Settings[/B][/SIZE]
+[LIST]
+[*]Theme selection — FlatLaf Dark/Light/IntelliJ/Darcula, Nimbus, System, and more
+[*]Language: English, French, Simplified Chinese (auto-detected from your OS on first launch)
+[*]Camera angle presets (yaw/pitch) with live 3D preview
+[*]Thumbnail animation pose and render quality (Low/Medium/High)
+[*]3D background color picker
+[*]External program integration with [ICODE]{file}[/ICODE] placeholder
+[/LIST]
+
+[HR][/HR]
+
+[SIZE=5][B]Getting Started[/B][/SIZE]
+
+[SIZE=4][B]1. Browse models[/B][/SIZE]
+Click [B]Browse[/B] and select a folder containing [ICODE].mdx[/ICODE] / [ICODE].mdl[/ICODE] files. The application scans recursively and displays animated 3D thumbnails. You can also open map archives ([ICODE].w3x[/ICODE], [ICODE].w3m[/ICODE]) directly.
+
+[SIZE=4][B]2. Configure data sources (optional)[/B][/SIZE]
+To display game textures on models, open [B]Settings[/B] and configure a data source:
+
+[B]CASC (Reforged):[/B] Click Browse and select your Warcraft III install folder (the one containing [ICODE]_retail_[/ICODE] or [ICODE]Data[/ICODE]).
+Typical path: [ICODE]C:\Program Files (x86)\Warcraft III[/ICODE]
+
+[B]MPQ (Classic):[/B] Click Add and select your [ICODE].mpq[/ICODE] archive files ([ICODE]war3.mpq[/ICODE], [ICODE]war3x.mpq[/ICODE], [ICODE]war3patch.mpq[/ICODE]). Multiple archives can be added.
+
+[SIZE=4][B]3. Explore a model[/B][/SIZE]
+Click any thumbnail to open the 3D viewer. Use the tabs on the right to inspect animations, textures, materials, geosets, UV maps, and the bone hierarchy.
+
+[HR][/HR]
+
+[SIZE=5][B]Keyboard Shortcuts[/B][/SIZE]
+
+[TABLE width="100%"]
+[TR]
+[th]Shortcut[/th][th]Context[/th][th]Action[/th]
+[/TR]
+[TR]
+[td]Arrow keys[/td][td]Browser[/td][td]Navigate thumbnails[/td]
+[/TR]
+[TR]
+[td]Enter[/td][td]Browser[/td][td]Open selected model[/td]
+[/TR]
+[TR]
+[td]Left / Up[/td][td]Viewer[/td][td]Previous animation[/td]
+[/TR]
+[TR]
+[td]Right / Down[/td][td]Viewer[/td][td]Next animation[/td]
+[/TR]
+[/TABLE]
+
+[HR][/HR]
+
+[SIZE=5][B]Download[/B][/SIZE]
+
+[B]Windows:[/B] Download the zip, extract, and run [ICODE]WC3ModelExplorer.exe[/ICODE].
+
+[URL='https://github.com/Jaccouille/wc3-model-explorer/releases']Releases on GitHub[/URL]
+
+[SPOILER="Changelogs v1.4.0"]
+[LIST]
+[*]Simplified Chinese (zh-CN) translation added (thanks to @jzy-chitong56)
+[*]Auto-detect OS language on first launch — picks French or Simplified Chinese if the OS matches, falls back to English otherwise
+[*]Language selector now uses autonyms — each language is shown in its native form (English, Français, 简体中文) so users can recognise their language regardless of the current UI locale
+[/LIST]
+[/SPOILER]
+[SPOILER="Changelogs v1.3.0"]
+[LIST]
+[*]Tag system: auto-extract tags from hiveworkshop readme.html files (in a model's folder or its parent), parsing lines like Tags: Hero, Unit, Historic
+[*]Tri-state tag filter buttons in the toolbar — click to cycle Neutral → Include → Exclude to require or hide models carrying a given tag
+[*]Per-model custom tags via the right-click Tags submenu (add / remove / create new)
+[*]Settings > Tags: toggle automatic tag parsing, hide unwanted tags from the filter bar, and restore previously hidden tags
+[*]HD (Reforged) model detection: cards display a static "HD (Unsupported)" badge instead of a thumbnail, and clicking shows a warning dialog rather than opening the viewer
+[*]Card grid distributes spacing evenly across the viewport so cards fill the available width instead of leaving a ragged right margin
+[*]Camera settings: yaw/pitch sliders replaced with circular angle dials; controls and 3D preview now sit side-by-side in a resizable horizontal split
+[*]Mouse-orbit drag in the camera preview now updates the yaw/pitch dials live (the dragged angles are saved on Apply)
+[*]Settings: "recent models" renamed to "recent folders" (now records the directory of the last opened scan rather than individual model paths; capacity reduced from 20 → 15)
+[*]HD/Reforged skinning and rendering paths that were prototyped but never fully supported — HD models are now explicitly gated rather than partially rendered
+[/LIST]
+[/SPOILER]
+[SPOILER="Changelogs v1.2.0"]
+[LIST]
+[*]Moved 3D background color setting from Theme tab to Camera tab, now updates the camera preview live
+[*]Stop button to cancel directory scanning (useful for large root folders)
+[*]Data source status indicator on main window status bar and in Settings > Data Sources tab
+[*]Logs tab in Settings for viewing and copying application logs (for debugging/support)
+[/LIST]
+[/SPOILER]
+[SPOILER="Changelogs v1.1.0"]
+[LIST]
+[*]Fixed BLP textures appearing too bright
+[*]Thumbnails now rescan properly wgeb CASC/MPQ data sources are changed in Settings
+[/LIST]
+[/SPOILER]
+
+
+[HR][/HR]
+
+[SIZE=5][B]Credits & Acknowledgements[/B][/SIZE]
+[LIST]
+[*][URL='https://www.hiveworkshop.com/threads/mdx-specifications.240487/']Mdx spefication[/URL]
+[*][URL='https://github.com/Retera/ReterasModelStudio']Retera's Model Studio[/URL] — MDX/MDL parsing library and renderer reference
+[*][URL='https://github.com/tw1lac/ReterasModelStudio']Tw1lac's fork of Retera Model Studio[/URL] — additional renderer reference
+[*][URL='https://github.com/4eb0da/war3-model']TypeScript-based mdl/mdx (Warcraft 3 model formats) converter/renderer[/URL] — For more precise reference on ribbon emitter rendering
+[*][URL='https://github.com/inwc3/JMPQ3']JMPQ3[/URL] — MPQ archive support
+[*][URL='https://github.com/DrSuperGood/JCASC']JCASC[/URL] — CASC archive support
+[*][URL='https://www.lwjgl.org/']LWJGL 3[/URL] — OpenGL rendering
+[*][URL='https://www.formdev.com/flatlaf/']FlatLaf[/URL] — modern Swing look and feel
+[/LIST]
+
+[SIZE=4][B]Made with[/B][/SIZE]
+
+This project was vibe-coded with [URL='https://claude.ai/']Claude[/URL] (Anthropic).
